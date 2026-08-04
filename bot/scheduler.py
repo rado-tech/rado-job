@@ -87,8 +87,20 @@ async def _tick(bot: Bot) -> None:
         for job_id in await svc.jobs_needing_promotion(session):
             await notifier.promote_and_notify(bot, session, job_id)
 
+        # Eslatmalar: ish oldingi kuni kechqurun va ishgacha bir necha soat.
+        evening = await notifier.send_reminders(bot, session, "evening")
+        soon = await notifier.send_reminders(bot, session, "soon")
+
+        # Tugagan ishlar bo'yicha «chiqdingizmi?» so'rovi.
+        asked = await notifier.ask_attendance(bot, session)
+
         if expired:
             log.info("%s ta bron muddati tugadi", len(expired))
+        if evening or soon or asked:
+            log.info(
+                "Eslatma: kechqurun=%s, tez orada=%s · davomat so'rovi=%s",
+                evening, soon, asked,
+            )
 
 
 async def _daily_backup(bot: Bot, day: str) -> None:

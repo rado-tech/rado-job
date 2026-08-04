@@ -21,8 +21,10 @@ from bot.keyboards import (
     regions_kb,
     role_kb,
 )
+from bot import runtime
 from bot.permissions import is_staff
 from bot.services import jobs as svc
+from bot.services import settings_store as store
 from bot.states import Reg
 
 router = Router(name="common")
@@ -44,6 +46,15 @@ async def cmd_start(
     pending_job: int | None = None
     if payload.startswith("job_") and payload[4:].isdigit():
         pending_job = int(payload[4:])
+
+    # Referal havolasi: https://t.me/bot?start=ref_123456789
+    # Faqat YANGI foydalanuvchi uchun ishlaydi va o'zini o'zi chaqira olmaydi.
+    if payload.startswith("ref_") and payload[4:].isdigit():
+        if await svc.register_referral(session, user, int(payload[4:])):
+            await message.answer(
+                "🎁 Do'stingizning havolasi orqali kirdingiz.\n"
+                "<i>Birinchi ishga yozilganingizda unga bonus beriladi.</i>"
+            )
 
     if not user.is_registered:
         if pending_job:
@@ -187,15 +198,30 @@ async def profile(message: Message, state: FSMContext, user: User) -> None:
             f"Qiziqishlar: {cats}\n"
             f"Xabarnoma: {'🔔 yoqilgan' if user.notify else '🔕 o‘chirilgan'}\n"
             f"Ishonchlilik: <b>{user.reliability}</b>\n"
+            f"🎫 Bepul yozilish bonusi: <b>{user.free_credits}</b>\n"
         )
     text += (
         f"\nID: <code>{user.id}</code>\n\n"
+        f"/dost — do'st chaqirib bonus olish\n"
         f"/hudud — hududni o'zgartirish\n"
         f"/kasb — qiziqishlarni o'zgartirish\n"
         f"/xabar — xabarnomani yoqish/o'chirish\n"
+        f"/shikoyat — muammo yoki savol\n"
         f"/rol — rolni almashtirish"
     )
     await message.answer(text)
+
+
+@router.message(Command("dost"))
+async def referral(message: Message, user: User) -> None:
+    reward = store.referral_reward()
+    if reward <= 0:
+        await message.answer("Hozircha referal dasturi o'chirilgan.")
+        return
+    link = f"https://t.me/{runtime.bot_username}?start=ref_{user.id}"
+    await message.answer(
+        texts.referral_info(link, user.invited_count, user.free_credits, reward)
+    )
 
 
 @router.message(Command("hudud"))
@@ -259,8 +285,10 @@ async def cmd_help(message: Message, user: User) -> None:
         "/ishlar — ochiq e'lonlar\n"
         "/mening — mening ishlarim\n"
         "/profil — profil\n"
+        "/dost — do'st chaqirib bonus olish\n"
         "/kasb — qiziqishlar\n"
         "/xabar — xabarnomani yoqish/o'chirish\n"
+        "/shikoyat — muammo yoki savol\n"
     )
     if user.id in env.admins:
         text += (

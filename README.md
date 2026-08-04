@@ -90,6 +90,63 @@ reklamasida, bayramda).
 
 ---
 
+## Eslatma va davomat
+
+Bot ishchini **uch marta** eslatadi va o'zi so'raydi:
+
+| Qachon | Nima |
+|---|---|
+| Ish oldingi kuni **20:00** | «Ertaga ishingiz bor» + manzil + lokatsiya |
+| Ishgacha **2 soat** qolganda | «Yo'lga chiqing» + manzil |
+| Ish boshlangandan **5 soat** keyin | «Ishga chiqdingizmi?» ✅/❌ |
+
+Davomat so'rovi **ikki tomonga** boradi: ishchiga (o'zi javob beradi) va
+ish muallifiga (ro'yxat + tugmalar). Muallifning qarori ustun turadi.
+
+Ilgari admin qo'lda belgilashi kerak edi — u esa unutardi va ishonchlilik
+ko'rsatkichi o'lik qolardi. Endi o'zi ishlaydi.
+
+**Bekor qilish oynasi.** Ishgacha **3 soatdan kam** qolganda bekor qilish
+«ishga chiqmagan» deb yoziladi — lekin odam buni **oldindan ko'radi** va
+o'zi tanlaydi. Joy baribir bo'shaydi va navbatdagi chaqiriladi.
+
+> Nega jazolaymiz-u, joyni bo'shatamiz? Chunki aytmasdan kelmaslikdan
+> ko'ra, aytib bekor qilish yaxshiroq. Ogohlantirish ko'rsatiladi, lekin
+> yo'l yopilmaydi.
+
+Barcha vaqtlar `⚙️ Sozlamalar` da ko'rinadi.
+
+---
+
+## 🎁 Referal — do'st chaqirish
+
+`/dost` → shaxsiy havola. Do'st shu havola orqali kirib **birinchi ishga
+yozilsa**, chaqiruvchiga **bepul yozilish bonusi** beriladi.
+
+Bonus pulli e'longa ishlatiladi: e'lon kartasida ikkita tugma chiqadi —
+«✅ Yozilish · 10 000» va «🎁 Bonus bilan bepul». Qaysi ishga sarflashni
+odam o'zi hal qiladi.
+
+**Soxta akkauntga qarshi:** mukofot ro'yxatdan o'tganda emas, do'st
+**haqiqatan ishga yozilganda** beriladi. Telefon raqami majburiy bo'lgani
+ustiga bu ikkinchi to'siq.
+
+O'chirish: `referral_reward` ni 0 qiling.
+
+---
+
+## 🆘 Murojaatlar
+
+Ishchi: tasdiqlangan ish kartasida `🆘 Shikoyat` tugmasi yoki `/shikoyat`.
+
+Admin/moderator: `🆘 Murojaatlar` bo'limi — har biriga `✍️ Javob berish`
+yoki `✅ Yopish`. Javob to'g'ridan-to'g'ri foydalanuvchiga boradi.
+
+Real pul aylanganda bu majburiy: busiz odam shikoyatini ochiq kanalga
+yozadi va obro'ingizga zarar yetadi.
+
+---
+
 ## 📣 Reklama tarqatish
 
 `🛠 Admin` → `📣 Reklama` (yoki `/reklama`) — faqat admin uchun.
@@ -281,6 +338,8 @@ bazani **o'chirmaydi** — nomini o'zgartirib chetga oladi.
 | `⏳ Navbatga yozilish` | To'lgan e'longa **bepul** navbat |
 | `📋 Mening ishlarim` | Barcha arizalar va ularning holati |
 | `/kasb` | Qiziqishlar — faqat shu turdagi e'lonlar haqida xabar keladi |
+| `/dost` | Do'st chaqirib **bepul yozilish bonusi** olish |
+| `/shikoyat` | Muammo yoki savol — adminga boradi |
 | `/xabar` | Xabarnomani yoqish/o'chirish |
 
 ### Ish beruvchi

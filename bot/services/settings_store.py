@@ -41,6 +41,25 @@ DEFAULTS: dict[str, str] = {
     # Oxirgi marta zaxira Telegramga yuborilgan vaqt — kuniga bir marta
     # yuborishni ta'minlash uchun.
     "last_backup_sent": "",
+
+    # --- Eslatmalar ---
+    # Ish oldingi kuni kechqurun soat nechada eslatma yuborilsin (Toshkent).
+    "remind_evening_hour": "20",
+    # Ishgacha necha daqiqa qolganda ikkinchi eslatma.
+    "remind_before_minutes": "120",
+    # Ish boshlangandan necha soat keyin "chiqdingizmi?" so'ralsin.
+    "attendance_after_hours": "5",
+
+    # --- Bekor qilish oynasi ---
+    # Ishgacha shuncha daqiqadan kam qolganda bekor qilish "kelmagan"
+    # deb hisoblanadi. Odam baribir bekor qila oladi (joy bo'shasin), lekin
+    # ogohlantirish ko'radi.
+    "cancel_window_minutes": "180",
+
+    # --- Referal ---
+    # Chaqirilgan do'st birinchi ishga yozilganda chaqiruvchiga nechta
+    # bepul yozilish bonusi beriladi. 0 = referal o'chirilgan.
+    "referral_reward": "1",
 }
 
 _cache: dict[str, str] = {}
@@ -142,6 +161,26 @@ def waitlist_minutes() -> int:
 
 def free_mode() -> bool:
     return get("free_mode") == "1"
+
+
+def remind_evening_hour() -> int:
+    return get_int("remind_evening_hour", 20)
+
+
+def remind_before_minutes() -> int:
+    return get_int("remind_before_minutes", 120)
+
+
+def attendance_after_hours() -> int:
+    return get_int("attendance_after_hours", 5)
+
+
+def cancel_window_minutes() -> int:
+    return get_int("cancel_window_minutes", 180)
+
+
+def referral_reward() -> int:
+    return get_int("referral_reward", 1)
 
 
 def max_no_show() -> int:

@@ -17,9 +17,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from bot.config import TZ
 from bot.config import settings as env
 from bot.db.models import (
     OCCUPYING,
+    UNLOCKED,
     Booking,
     BookingStatus,
     Job,
@@ -222,15 +224,15 @@ async def active_booking(session: AsyncSession, job_id: int, user_id: int) -> Bo
 
 # ================================================================ yozilish
 
-async def apply_to_job(session: AsyncSession, job_id: int, user_id: int) -> Booking:
+async def apply_to_job(
+    session: AsyncSession, job_id: int, user_id: int, *, use_credit: bool = False
+) -> Booking:
     """Joyni bron qilish. Butun mantiqning yuragi.
 
-    Ikki xil yakun bo'ladi:
-      * PULLI e'lon  -> PENDING_PAYMENT, joy vaqtincha bron qilinadi va
-                        ishchidan chek kutiladi
-      * BEPUL e'lon  -> darhol CONFIRMED, maxfiy ma'lumot o'sha zahoti
-                        beriladi. Chek ham, moderatsiya ham, bron muddati
-                        ham kerak emas.
+    Uch xil yakun:
+      * BEPUL e'lon        -> darhol CONFIRMED, tafsilotlar o'sha zahoti
+      * BONUS bilan        -> darhol CONFIRMED, bir bonus sarflanadi
+      * PULLI e'lon        -> PENDING_PAYMENT, joy bron qilinadi, chek kutiladi
     """
     async with _job_locks[job_id]:
         job = await _fresh_job(session, job_id)
@@ -243,7 +245,17 @@ async def apply_to_job(session: AsyncSession, job_id: int, user_id: int) -> Book
         if existing and _is_alive(existing):
             raise ApplyError("Siz bu ishga allaqachon yozilgansiz.")
 
-        await _check_no_show_limit(session, job, user_id)
+        user = await session.get(User, user_id)
+        free_for_user = job.fee <= 0
+        if use_credit:
+            if job.fee <= 0:
+                use_credit = False  # bepul ishga bonus sarflash — bekorchilik
+            elif user is None or user.free_credits <= 0:
+                raise ApplyError("Sizda bepul yozilish bonusi yo'q.")
+            else:
+                free_for_user = True
+
+        await _check_no_show_limit(session, job, user, free_for_user)
 
         if await taken_count(session, job_id) >= job.slots_total:
             job.status = JobStatus.FULL
@@ -252,42 +264,41 @@ async def apply_to_job(session: AsyncSession, job_id: int, user_id: int) -> Book
 
         booking = _revive(session, existing, job_id, user_id)
         booking.queued_at = None
-        _set_after_apply(booking, job)
+        booking.used_credit = use_credit
+        if free_for_user:
+            booking.status = BookingStatus.CONFIRMED
+            booking.expires_at = None
+            booking.decided_at = utcnow()
+            if use_credit and user:
+                user.free_credits -= 1
+        else:
+            booking.status = BookingStatus.PENDING_PAYMENT
+            booking.expires_at = utcnow() + timedelta(minutes=store.hold_minutes())
         await session.commit()
 
         await _sync_status(session, job)
         return booking
 
 
-def _set_after_apply(booking: Booking, job: Job) -> None:
-    """Pulli/bepul e'longa qarab arizaning holatini belgilaydi."""
-    if job.fee <= 0:
-        booking.status = BookingStatus.CONFIRMED
-        booking.expires_at = None
-        booking.decided_at = utcnow()
-    else:
-        booking.status = BookingStatus.PENDING_PAYMENT
-        booking.expires_at = utcnow() + timedelta(minutes=store.hold_minutes())
-
-
-async def _check_no_show_limit(session: AsyncSession, job: Job, user_id: int) -> None:
+async def _check_no_show_limit(
+    session: AsyncSession, job: Job, user: User | None, free_for_user: bool
+) -> None:
     """Bepul ishlarda "yozilib qo'yaman, borsam boraman" muammosini jilovlaydi.
 
     Pul to'langanda odam albatta boradi — puli ketgan. Bepul bo'lganda esa
     bu tabiiy tiyilish yo'qoladi va joylar bekorga band bo'ladi. Shuning
-    uchun ishga chiqmaslik chegarasi FAQAT bepul ishlarga qo'llanadi:
-    pulli ishga baribir yozilaverishi mumkin.
+    uchun chegara FAQAT to'lovsiz yozilishga qo'llanadi (bepul e'lon yoki
+    bonus): pulli ishga baribir yozilaverishi mumkin.
     """
-    if job.fee > 0:
+    if not free_for_user:
         return
     limit = store.max_no_show()
-    if limit <= 0:
+    if limit <= 0 or user is None:
         return
-    user = await session.get(User, user_id)
-    if user and user.no_show_count >= limit:
+    if user.no_show_count >= limit:
         raise ApplyError(
             f"Siz {user.no_show_count} marta yozilib, ishga chiqmagansiz. "
-            f"Shuning uchun bepul ishlarga yozila olmaysiz. "
+            f"Shuning uchun to'lovsiz yozila olmaysiz. "
             f"Administrator bilan bog'laning."
         )
 
@@ -380,11 +391,46 @@ async def has_money_bookings(session: AsyncSession, job_id: int) -> bool:
     return bool((await session.scalar(stmt)) or 0)
 
 
-async def cancel_booking(session: AsyncSession, booking: Booking) -> None:
-    booking.status = BookingStatus.CANCELLED
+def is_late_cancel(job: Job, booking: Booking) -> bool:
+    """Bekor qilish "kech" hisoblanadimi?
+
+    Faqat tasdiqlangan ariza uchun mantiqiy: odam joyni egallab turgan va
+    oxirgi daqiqada voz kechsa, o'rniga boshqa odam topib bo'lmaydi.
+    To'lov kutayotgan yoki navbatdagilarga bu qo'llanmaydi.
+    """
+    if booking.status not in (BookingStatus.CONFIRMED, BookingStatus.COMPLETED):
+        return False
+    window = store.cancel_window_minutes()
+    if window <= 0:
+        return False
+    return job.starts_at - utcnow() < timedelta(minutes=window)
+
+
+async def cancel_booking(session: AsyncSession, booking: Booking, *, late: bool = False) -> None:
+    """Arizani bekor qiladi.
+
+    Kech bekor qilishda ham joyni BO'SHATAMIZ — bu bizga foydali, chunki
+    navbatdagi odam o'rnini egallashi mumkin. Lekin bu "kelmagan" deb
+    hisoblanadi, aks holda oxirgi daqiqada voz kechish jazosiz bo'lardi.
+
+    Muhim nuqta: odam ogohlantirishni OLDINDAN ko'radi va o'zi tanlaydi.
+    Aytmasdan kelmaslikdan ko'ra, aytib bekor qilish baribir yaxshiroq.
+    """
+    # LATE_CANCEL joyni EGALLAMAYDI (OCCUPYING ro'yxatida yo'q) — shu tufayli
+    # joy darhol bo'shaydi va navbatdagi odam chaqiriladi. NO_SHOW esa
+    # egallaydi: u odam kelmagani ish tugagandan keyin bilinadi, joy allaqachon
+    # sarflangan bo'ladi.
+    booking.status = BookingStatus.LATE_CANCEL if late else BookingStatus.CANCELLED
     booking.expires_at = None
     booking.queued_at = None
     await session.commit()
+
+    if late:
+        user = await session.get(User, booking.user_id)
+        if user:
+            user.no_show_count += 1
+            await session.commit()
+
     job = await session.get(Job, booking.job_id)
     if job:
         await _sync_status(session, job)
@@ -424,20 +470,157 @@ async def reject_booking(
 
 
 async def mark_no_show(session: AsyncSession, booking: Booking) -> None:
-    """Ishga chiqmagan. Joy qaytarilmaydi — u to'lagan, lekin bormagan."""
+    """Ishga chiqmagan. Joy qaytarilmaydi — u yozilgan, lekin bormagan."""
+    if booking.status == BookingStatus.NO_SHOW:
+        return
+    was_completed = booking.status == BookingStatus.COMPLETED
     booking.status = BookingStatus.NO_SHOW
     await session.commit()
     user = await session.get(User, booking.user_id)
     if user:
         user.no_show_count += 1
+        if was_completed and user.completed_count > 0:
+            user.completed_count -= 1  # avvalgi belgi noto'g'ri ekan
         await session.commit()
 
 
 async def mark_completed(session: AsyncSession, booking: Booking) -> None:
+    """Ishga chiqdi.
+
+    Bir ariza ikki marta sanalmasligi kerak: ishchi o'zi tasdiqlaydi, keyin
+    ish beruvchi ham bosishi mumkin.
+    """
+    if booking.status == BookingStatus.COMPLETED:
+        return
+    was_no_show = booking.status == BookingStatus.NO_SHOW
+    booking.status = BookingStatus.COMPLETED
+    await session.commit()
     user = await session.get(User, booking.user_id)
     if user:
         user.completed_count += 1
+        if was_no_show and user.no_show_count > 0:
+            user.no_show_count -= 1
         await session.commit()
+
+
+# ================================================================ referal
+
+async def register_referral(session: AsyncSession, user: User, inviter_id: int) -> bool:
+    """Kim chaqirganini yozib qo'yadi. Mukofot hali berilmaydi."""
+    if user.invited_by is not None or user.id == inviter_id:
+        return False
+    inviter = await session.get(User, inviter_id)
+    if inviter is None:
+        return False
+    user.invited_by = inviter_id
+    inviter.invited_count += 1
+    await session.commit()
+    return True
+
+
+async def reward_referrer(session: AsyncSession, user_id: int) -> tuple[User, int] | None:
+    """Chaqirilgan odam birinchi marta ishga yozilganda mukofot beradi.
+
+    Nega darhol emas, balki birinchi yozilishdan keyin? Aks holda soxta
+    akkauntlar bilan bonus yig'ish mumkin bo'lardi. Telefon raqami majburiy
+    bo'lgani ustiga bu ikkinchi to'siq.
+    """
+    reward = store.referral_reward()
+    if reward <= 0:
+        return None
+    user = await session.get(User, user_id)
+    if user is None or user.invited_by is None or user.referral_rewarded:
+        return None
+
+    inviter = await session.get(User, user.invited_by)
+    if inviter is None or inviter.is_blocked:
+        return None
+
+    user.referral_rewarded = True
+    inviter.free_credits += reward
+    await session.commit()
+    return inviter, reward
+
+
+# ================================================================ eslatmalar
+
+async def bookings_needing_reminder(session: AsyncSession, kind: str) -> list[Booking]:
+    """Eslatma yuborilishi kerak bo'lgan arizalar.
+
+    kind="evening" — ish oldingi kuni kechqurun
+    kind="soon"    — ishgacha bir necha soat qolganda
+    """
+    now = utcnow()
+    flag = Booking.reminded_evening if kind == "evening" else Booking.reminded_soon
+
+    stmt = (
+        select(Booking)
+        .options(selectinload(Booking.job), selectinload(Booking.user))
+        .join(Job, Job.id == Booking.job_id)
+        .where(
+            Booking.status == BookingStatus.CONFIRMED,
+            flag.is_(False),
+            Job.work_date >= date.today(),
+            Job.status.in_([JobStatus.OPEN, JobStatus.FULL]),
+        )
+        .limit(500)
+    )
+    candidates = list((await session.scalars(stmt)).all())
+
+    result = []
+    for b in candidates:
+        starts = b.job.starts_at
+        if starts <= now:
+            continue
+        if kind == "evening":
+            # Faqat ERTAGAgi ishlar uchun, va faqat belgilangan soatdan keyin.
+            local_now = now.astimezone(TZ)
+            if b.job.work_date != local_now.date() + timedelta(days=1):
+                continue
+            if local_now.hour < store.remind_evening_hour():
+                continue
+        else:
+            minutes_left = (starts - now).total_seconds() / 60
+            if minutes_left > store.remind_before_minutes():
+                continue
+        result.append(b)
+    return result
+
+
+async def mark_reminded(session: AsyncSession, bookings: list[Booking], kind: str) -> None:
+    for b in bookings:
+        if kind == "evening":
+            b.reminded_evening = True
+        else:
+            b.reminded_soon = True
+    if bookings:
+        await session.commit()
+
+
+async def jobs_needing_attendance(session: AsyncSession) -> list[Job]:
+    """Tugagan, lekin yozilganlari hali belgilanmagan ishlar."""
+    now = utcnow()
+    stmt = (
+        select(Job)
+        .where(Job.attendance_asked.is_(False), Job.work_date <= date.today())
+        .limit(100)
+    )
+    jobs = list((await session.scalars(stmt)).all())
+    after = timedelta(hours=store.attendance_after_hours())
+    return [j for j in jobs if j.starts_at + after <= now]
+
+
+async def bookings_to_ask(session: AsyncSession, job_id: int) -> list[Booking]:
+    stmt = (
+        select(Booking)
+        .options(selectinload(Booking.job), selectinload(Booking.user))
+        .where(
+            Booking.job_id == job_id,
+            Booking.status == BookingStatus.CONFIRMED,
+            Booking.attendance_asked.is_(False),
+        )
+    )
+    return list((await session.scalars(stmt)).all())
 
 
 # ================================================================ fon
@@ -563,11 +746,18 @@ async def stats(session: AsyncSession) -> dict:
     async def count(model, *where) -> int:
         return int((await session.scalar(select(func.count()).select_from(model).where(*where))) or 0)
 
+    # Tushum: faqat HAQIQIY to'lovlar. Bepul e'lonlar (fee=0) va bonus
+    # hisobiga yozilganlar hisobga olinmaydi.
     revenue = await session.scalar(
         select(func.coalesce(func.sum(Job.fee), 0))
         .select_from(Booking)
         .join(Job, Job.id == Booking.job_id)
-        .where(Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.NO_SHOW]))
+        .where(
+            Booking.status.in_(
+                [BookingStatus.CONFIRMED, BookingStatus.COMPLETED, BookingStatus.NO_SHOW]
+            ),
+            Booking.used_credit.is_(False),
+        )
     )
     return {
         "users": await count(User),
@@ -578,8 +768,14 @@ async def stats(session: AsyncSession) -> dict:
         "open_jobs": await count(Job, Job.status == JobStatus.OPEN),
         "review_jobs": await count(Job, Job.status == JobStatus.PENDING_REVIEW),
         "confirmed": await count(Booking, Booking.status == BookingStatus.CONFIRMED),
+        "completed": await count(Booking, Booking.status == BookingStatus.COMPLETED),
+        "no_show": await count(
+            Booking,
+            Booking.status.in_([BookingStatus.NO_SHOW, BookingStatus.LATE_CANCEL]),
+        ),
         "waiting": await count(Booking, Booking.status == BookingStatus.RECEIPT_SENT),
         "waitlist": await count(Booking, Booking.status == BookingStatus.WAITLIST),
+        "credits_used": await count(Booking, Booking.used_credit.is_(True)),
         "revenue": int(revenue or 0),
     }
 
