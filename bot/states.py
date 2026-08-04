@@ -70,3 +70,8 @@ class Ad(StatesGroup):
 
 class Search(StatesGroup):
     user_query = State()
+
+
+class ReportFlow(StatesGroup):
+    text = State()
+    answer = State()

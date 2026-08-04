@@ -10,7 +10,9 @@ To'rtta jadval:
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
+
+from bot.config import TZ
 
 from sqlalchemy import (
     BigInteger,
@@ -90,11 +92,14 @@ class BookingStatus(str, enum.Enum):
     WAITLIST = "WAITLIST"                # navbatda, hali to'lov talab qilinmagan
     PENDING_PAYMENT = "PENDING_PAYMENT"  # joy bron qilindi, chek kutilyapti
     RECEIPT_SENT = "RECEIPT_SENT"        # chek yuborildi, admin qarori kutilyapti
-    CONFIRMED = "CONFIRMED"              # to'lov tasdiqlandi, sir ma'lumot berildi
+    CONFIRMED = "CONFIRMED"              # tasdiqlandi, sir ma'lumot berildi
+    COMPLETED = "COMPLETED"              # ishga chiqdi (ish yakunlandi)
     REJECTED = "REJECTED"                # admin chekni rad etdi
-    CANCELLED = "CANCELLED"              # ishchi o'zi bekor qildi
+    CANCELLED = "CANCELLED"              # ishchi o'zi (o'z vaqtida) bekor qildi
+    LATE_CANCEL = "LATE_CANCEL"          # ish oldidan bekor qildi — joy bo'shadi,
+                                         # lekin ishonchlilikka ta'sir qiladi
     EXPIRED = "EXPIRED"                  # vaqtida chek yubormadi
-    NO_SHOW = "NO_SHOW"                  # to'ladi, lekin ishga chiqmadi
+    NO_SHOW = "NO_SHOW"                  # yozilib, aytmasdan ishga chiqmadi
 
 
 # Joyni "band" deb hisoblanadigan holatlar. Navbat (WAITLIST) joy egallamaydi.
@@ -102,8 +107,18 @@ OCCUPYING = (
     BookingStatus.PENDING_PAYMENT,
     BookingStatus.RECEIPT_SENT,
     BookingStatus.CONFIRMED,
+    BookingStatus.COMPLETED,
     BookingStatus.NO_SHOW,  # ishga chiqmagan bo'lsa ham joy o'shaniki edi
 )
+
+# Ish tafsilotlarini ko'ra oladigan holatlar.
+UNLOCKED = (BookingStatus.CONFIRMED, BookingStatus.COMPLETED, BookingStatus.NO_SHOW)
+
+
+class ReportStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    ANSWERED = "ANSWERED"
+    CLOSED = "CLOSED"
 
 
 # ---------------------------------------------------------------- jadvallar
@@ -146,6 +161,15 @@ class User(Base):
 
     completed_count: Mapped[int] = mapped_column(Integer, default=0)
     no_show_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Referal. invited_by — kim chaqirgan; referral_rewarded — chaqiruvchiga
+    # mukofot berilgan-berilmagani (bir odam uchun bir marta).
+    invited_by: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    referral_rewarded: Mapped[bool] = mapped_column(Boolean, default=False)
+    invited_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Bepul yozilish bonuslari. Pulli e'longa to'lovsiz yozilish uchun.
+    free_credits: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
@@ -210,10 +234,27 @@ class Job(Base):
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
+    # Ish tugagach yozilganlarni belgilash so'rovi yuborilganmi.
+    attendance_asked: Mapped[bool] = mapped_column(Boolean, default=False)
+
     bookings: Mapped[list["Booking"]] = relationship(back_populates="job")
     posts: Mapped[list["JobPost"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
+
+    @property
+    def starts_at(self) -> datetime:
+        """Ish boshlanish vaqti — UTC da.
+
+        Bazada sana va vaqt alohida (matn) saqlanadi, chunki admin ularni
+        alohida kiritadi. Eslatma yuborish uchun esa aniq moment kerak.
+        """
+        try:
+            hh, mm = (self.start_time or "08:00").split(":")
+            local_time = time(int(hh), int(mm))
+        except (ValueError, AttributeError):
+            local_time = time(8, 0)
+        return datetime.combine(self.work_date, local_time, tzinfo=TZ).astimezone(timezone.utc)
     # Bu bog'lanish mantiq uchun emas, YOZISH TARTIBI uchun kerak: SQLAlchemy
     # faqat relationship orqali "avval user, keyin job" ekanini tushunadi.
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])
@@ -238,6 +279,14 @@ class Booking(Base):
     receipt_file_id: Mapped[str | None] = mapped_column(String(256))
     expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
 
+    # Eslatmalar bir marta yuborilishi uchun belgilar.
+    reminded_evening: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminded_soon: Mapped[bool] = mapped_column(Boolean, default=False)
+    attendance_asked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Bonus hisobiga (to'lovsiz) yozilganmi — statistikada ajratish uchun.
+    used_credit: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Navbatga qachon yozilgani — kim oldin turgani shu bo'yicha aniqlanadi.
     queued_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
 
@@ -248,6 +297,33 @@ class Booking(Base):
 
     job: Mapped[Job] = relationship(back_populates="bookings")
     user: Mapped[User] = relationship()
+
+
+class Report(Base):
+    """Foydalanuvchi shikoyati / murojaati.
+
+    Real pul aylanganda bu majburiy: «ish e'londagidek emas edi»,
+    «pul to'lanmadi», «manzil noto'g'ri». Busiz odam shikoyatini
+    ochiq kanalga yozadi va obro'ingizga zarar yetadi.
+    """
+
+    __tablename__ = "reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+
+    status: Mapped[ReportStatus] = mapped_column(
+        SAEnum(ReportStatus), default=ReportStatus.OPEN, index=True
+    )
+    answer: Mapped[str | None] = mapped_column(Text)
+    handled_by: Mapped[int | None] = mapped_column(BigInteger)
+    handled_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+    user: Mapped[User] = relationship()
+    job: Mapped[Job | None] = relationship()
 
 
 class Channel(Base):

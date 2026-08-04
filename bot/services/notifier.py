@@ -7,6 +7,7 @@ mantiqi bir xil bo'lishi shart.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Bot
@@ -82,6 +83,103 @@ async def promote_and_notify(bot: Bot, session: AsyncSession, job_id: int) -> bo
             await publisher.sync_job_post(bot, session, job)
         return True
     return False
+
+
+async def reward_referrer_if_first(bot: Bot, session: AsyncSession, user_id: int) -> None:
+    """Chaqirilgan odam birinchi marta ishga yozildi — chaqiruvchiga bonus.
+
+    Har ariza tasdiqlanganda chaqiriladi, lekin ichkarida «bir marta»
+    tekshiruvi bor, shuning uchun takror bermaydi.
+    """
+    result = await svc.reward_referrer(session, user_id)
+    if result is None:
+        return
+    inviter, reward = result
+    friend = await session.get(svc.User, user_id)
+    name = friend.full_name if friend else "Do'stingiz"
+    try:
+        await bot.send_message(
+            inviter.id, texts.referral_rewarded(name, reward, inviter.free_credits)
+        )
+    except Exception as e:
+        log.debug("Referal xabari yetmadi (%s): %s", inviter.id, e)
+
+
+async def send_reminders(bot: Bot, session: AsyncSession, kind: str) -> int:
+    """Ish oldidan eslatma. No-show'ni eng ko'p kamaytiradigan narsa."""
+    bookings = await svc.bookings_needing_reminder(session, kind)
+    sent = []
+    for b in bookings:
+        try:
+            if kind == "evening":
+                text = texts.remind_evening(b.job)
+            else:
+                minutes = int((b.job.starts_at - svc.utcnow()).total_seconds() // 60)
+                text = texts.remind_soon(b.job, max(minutes, 1))
+            await bot.send_message(b.user_id, text)
+            if b.job.lat is not None and b.job.lon is not None:
+                await bot.send_location(b.user_id, latitude=b.job.lat, longitude=b.job.lon)
+            sent.append(b)
+        except TelegramForbiddenError:
+            await svc.deactivate(session, b.user_id)
+            sent.append(b)  # qayta urinmaymiz
+        except Exception as e:
+            log.debug("Eslatma yetmadi (%s): %s", b.user_id, e)
+        await asyncio.sleep(0.05)
+
+    await svc.mark_reminded(session, sent, kind)
+    return len(sent)
+
+
+async def ask_attendance(bot: Bot, session: AsyncSession) -> int:
+    """Ish tugagach «chiqdingizmi?» so'raydi.
+
+    Ikki tomonga: ishchiga (o'zi javob beradi) va ish muallifiga (uning
+    qarori ustun turadi). Ilgari faqat admin qo'lda belgilardi — u esa
+    unutardi va reyting o'lik qolardi.
+    """
+    from bot.keyboards import attendance_kb, worker_actions_kb
+
+    jobs = await svc.jobs_needing_attendance(session)
+    asked = 0
+
+    for job in jobs:
+        bookings = await svc.bookings_to_ask(session, job.id)
+
+        for b in bookings:
+            try:
+                await bot.send_message(
+                    b.user_id, texts.ask_attendance(job), reply_markup=attendance_kb(b.id)
+                )
+                asked += 1
+            except Exception as e:
+                log.debug("Davomat so'rovi yetmadi (%s): %s", b.user_id, e)
+            b.attendance_asked = True
+            await asyncio.sleep(0.05)
+
+        # Ish muallifiga ro'yxat — u tasdiqlaydi yoki to'g'rilaydi.
+        if bookings:
+            try:
+                await bot.send_message(
+                    job.created_by,
+                    f"📋 <b>«{job.title}» ishi tugadi.</b>\n\n"
+                    f"Kim chiqdi, kim chiqmadi — belgilab qo'ying. "
+                    f"Bu ishchilarning ishonchlilik ko'rsatkichiga yoziladi.",
+                )
+                for b in bookings:
+                    await bot.send_message(
+                        job.created_by,
+                        f"👤 {b.user.mention}\n📱 <code>{b.user.phone or '—'}</code>",
+                        reply_markup=worker_actions_kb(b.id),
+                    )
+                    await asyncio.sleep(0.05)
+            except Exception as e:
+                log.debug("Muallifga davomat ro'yxati yetmadi: %s", e)
+
+        job.attendance_asked = True
+        await session.commit()
+
+    return asked
 
 
 async def broadcast_job(bot: Bot, job_id: int, report_to: int | None = None) -> None:

@@ -92,6 +92,8 @@ async def approve(
     await _mark_done(call, f"\n\n✅ <b>TASDIQLANDI</b> — {user.full_name}")
     await call.answer("✅ Tasdiqlandi")
     await publisher.sync_job_post(bot, session, booking.job)
+    # Bu odam kimningdir havolasi orqali kelgan bo'lsa — chaqiruvchiga bonus.
+    await notifier.reward_referrer_if_first(bot, session, booking.user_id)
 
 
 @router.callback_query(ModCB.filter(F.action == "no"))

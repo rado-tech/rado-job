@@ -62,6 +62,12 @@ async def _view(session: AsyncSession) -> str:
         wait=store.waitlist_minutes(),
         free_mode=store.free_mode(),
         no_show=store.max_no_show(),
+    ) + (
+        f"\n\n⏰ <b>Eslatma:</b> oldingi kuni soat {store.remind_evening_hour()}:00 "
+        f"va ishgacha {store.remind_before_minutes()} daqiqa qolganda\n"
+        f"❓ <b>Davomat so'rovi:</b> ish boshlangandan {store.attendance_after_hours()} soat keyin\n"
+        f"🚫 <b>Bekor qilish oynasi:</b> {store.cancel_window_minutes()} daqiqa\n"
+        f"🎁 <b>Referal mukofoti:</b> {store.referral_reward()} ta bepul yozilish"
     )
 
 

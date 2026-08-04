@@ -261,11 +261,148 @@ BOOKING_STATUS_LABEL = {
     BookingStatus.PENDING_PAYMENT: "💳 To'lov kutilyapti",
     BookingStatus.RECEIPT_SENT: "🔎 Tekshiruvda",
     BookingStatus.CONFIRMED: "✅ Tasdiqlangan",
+    BookingStatus.COMPLETED: "🏁 Ishga chiqqan",
     BookingStatus.REJECTED: "❌ Rad etilgan",
     BookingStatus.CANCELLED: "🚫 Bekor qilingan",
+    BookingStatus.LATE_CANCEL: "⚠️ Kech bekor qilingan",
     BookingStatus.EXPIRED: "⌛️ Vaqti o'tgan",
     BookingStatus.NO_SHOW: "🚷 Ishga chiqmagan",
 }
+
+
+# ================================================================ eslatmalar
+
+def remind_evening(job: Job) -> str:
+    return (
+        f"⏰ <b>Ertaga ishingiz bor!</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)}\n"
+        f"🕗 <b>{job.start_time}</b> da boshlanadi\n"
+        f"📍 {job.region}\n\n"
+        f"🔒 <b>Manzil:</b>\n{job.secret_details}\n\n"
+        f"Bora olmasangiz — <b>hozir bekor qiling</b>, joy boshqa odamga o'tsin. "
+        f"«📋 Mening ishlarim» → e'lonni oching."
+    )
+
+
+def remind_soon(job: Job, minutes: int) -> str:
+    hours = minutes // 60
+    left = f"{hours} soat" if hours else f"{minutes} daqiqa"
+    return (
+        f"🔔 <b>Ishgacha {left} qoldi!</b>\n\n"
+        f"💼 {job.title}\n"
+        f"🕗 <b>{job.start_time}</b>\n\n"
+        f"🔒 <b>Manzil:</b>\n{job.secret_details}\n\n"
+        f"Yo'lga chiqing 🚶"
+    )
+
+
+def ask_attendance(job: Job) -> str:
+    return (
+        f"❓ <b>Ishga chiqdingizmi?</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)}\n\n"
+        f"<i>Rost javob bering — bu sizning ishonchlilik ko'rsatkichingizga "
+        f"yoziladi va keyingi ishlarda yordam beradi.</i>"
+    )
+
+
+ATTENDANCE_THANKS = (
+    "🏁 Rahmat! Ishga chiqqaningiz belgilandi.\n\n"
+    "Ishonchlilik ko'rsatkichingiz oshdi — keyingi e'lonlarda ustunlik beradi."
+)
+ATTENDANCE_NOSHOW = (
+    "📝 Belgilandi: ishga chiqmagansiz.\n\n"
+    "Iltimos, keyingi safar bora olmasangiz <b>oldindan bekor qiling</b> — "
+    "joy boshqa odamga o'tadi va sizning ko'rsatkichingiz tushmaydi."
+)
+
+
+def cancel_warning(job: Job, minutes_left: int) -> str:
+    hours = minutes_left // 60
+    left = f"{hours} soat {minutes_left % 60} daqiqa" if hours else f"{minutes_left} daqiqa"
+    return (
+        f"⚠️ <b>Diqqat!</b>\n\n"
+        f"«{job.title}» ishigacha atigi <b>{left}</b> qoldi.\n\n"
+        f"Hozir bekor qilsangiz bu <b>«ishga chiqmagan»</b> deb yoziladi — "
+        f"chunki bu vaqtda o'rningizga boshqa odam topish qiyin.\n\n"
+        f"Baribir bekor qilasizmi?"
+    )
+
+
+CANCEL_LATE_DONE = (
+    "⚠️ Bekor qilindi va «ishga chiqmagan» deb belgilandi.\n\n"
+    "Aytganingiz uchun rahmat — joy boshqa odamga o'tadi."
+)
+CANCEL_DONE = "🚫 Bekor qilindi. Joy bo'shatildi."
+
+
+# ================================================================ referal
+
+def referral_info(link: str, invited: int, credits: int, reward: int) -> str:
+    return (
+        f"🎁 <b>Do'st chaqiring — bepul ish oling</b>\n\n"
+        f"Havolangiz:\n<code>{link}</code>\n\n"
+        f"Do'stingiz shu havola orqali kirib <b>birinchi ishga yozilsa</b>, "
+        f"sizga <b>{reward} ta bepul yozilish</b> beriladi.\n\n"
+        f"👥 Chaqirganlaringiz: <b>{invited}</b>\n"
+        f"🎫 Bepul yozilish bonusi: <b>{credits}</b>\n\n"
+        f"<i>Bonusni istalgan pulli e'longa ishlatasiz — to'lov qilmasdan.</i>"
+    )
+
+
+def referral_rewarded(friend_name: str, reward: int, total: int) -> str:
+    return (
+        f"🎁 <b>Bonus oldingiz!</b>\n\n"
+        f"{friend_name} siz chaqirgan havola orqali kelib, birinchi ishga "
+        f"yozildi.\n\n"
+        f"➕ {reward} ta bepul yozilish\n"
+        f"🎫 Jami bonusingiz: <b>{total}</b>"
+    )
+
+
+def credit_used(left: int) -> str:
+    return (
+        f"🎁 <b>Bonus ishlatildi — to'lov qilmadingiz!</b>\n\n"
+        f"Qolgan bonus: <b>{left}</b>"
+    )
+
+
+# ================================================================ shikoyat
+
+ASK_REPORT = (
+    "🆘 <b>Shikoyat yoki savol</b>\n\n"
+    "Muammoni batafsil yozing: qaysi ish, nima bo'ldi.\n\n"
+    "<i>Masalan: #12 ishga bordim, manzilda hech kim yo'q edi.</i>\n\n"
+    "Bekor qilish: /cancel"
+)
+
+REPORT_SENT = (
+    "✅ <b>Murojaatingiz qabul qilindi.</b>\n\n"
+    "Administrator ko'rib chiqadi va shu yerga javob yozadi."
+)
+
+
+def report_card(report) -> str:  # noqa: ANN001
+    job_line = f"💼 E'lon: <b>{report.job.title}</b> (#{report.job.id})\n" if report.job else ""
+    return (
+        f"🆘 <b>YANGI MUROJAAT</b> <code>#{report.id}</code>\n\n"
+        f"👤 {report.user.mention}\n"
+        f"📱 <code>{report.user.phone or '—'}</code>\n"
+        f"📊 {report.user.reliability}\n"
+        f"{job_line}\n"
+        f"<b>Matn:</b>\n{report.text}"
+    )
+
+
+ASK_REPORT_ANSWER = (
+    "✍️ Javobingizni yozing — foydalanuvchiga shu matn boradi.\n\n"
+    "Bekor qilish: /cancel"
+)
+
+
+def report_answer(text: str) -> str:
+    return f"💬 <b>Murojaatingizga javob:</b>\n\n{text}"
 
 
 def my_booking_line(b: Booking) -> str:

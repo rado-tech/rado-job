@@ -14,22 +14,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from bot import texts
-from bot.callbacks import FeedCB, JobCB, NavCB, PickCB
+from bot.callbacks import AttendCB, FeedCB, JobCB, NavCB, PickCB
 from bot.config import CATEGORY_NAMES
-from bot.db.models import Booking, BookingStatus, JobStatus, User
+from bot.db.models import UNLOCKED, Booking, BookingStatus, JobStatus, User, utcnow
 from bot.keyboards import (
     BTN_FIND,
     BTN_MY,
+    cancel_confirm_kb,
     categories_kb,
     days_kb,
     feed_kb,
     job_view_kb,
     regions_kb,
+    report_kb,
 )
 from bot.services import jobs as svc
-from bot.services import notifier, publisher
+from bot.services import notifier, publisher, reports
 from bot.services import settings_store as store
-from bot.states import Pay
+from bot.states import Pay, ReportFlow
+from bot.utils import clean
 
 log = logging.getLogger(__name__)
 router = Router(name="worker")
@@ -191,9 +194,15 @@ async def show_job(message: Message, session: AsyncSession, user: User, job_id: 
     waiting = await svc.waitlist_count(session, job.id)
     booking = await svc.get_booking(session, job.id, user.id)
 
-    # To'lovi tasdiqlangan bo'lsa — maxfiy ma'lumot va lokatsiya bilan.
-    if booking and booking.status in (BookingStatus.CONFIRMED, BookingStatus.NO_SHOW):
-        await message.answer(texts.job_card(job, taken, secret=True, show_slots=False))
+    # Tafsilotlar ochilgan bo'lsa — maxfiy ma'lumot va lokatsiya bilan.
+    if booking and booking.status in UNLOCKED:
+        still_open = booking.status == BookingStatus.CONFIRMED
+        await message.answer(
+            texts.job_card(job, taken, secret=True, show_slots=False),
+            reply_markup=job_view_kb(
+                job, taken=taken, mine=True, can_wait=False, confirmed=still_open
+            ),
+        )
         if job.lat is not None and job.lon is not None:
             try:
                 await message.answer_location(latitude=job.lat, longitude=job.lon)
@@ -212,7 +221,8 @@ async def show_job(message: Message, session: AsyncSession, user: User, job_id: 
     await message.answer(
         header + texts.job_card(job, taken, waitlist=waiting),
         reply_markup=job_view_kb(
-            job, taken=taken, mine=active is not None, can_wait=True
+            job, taken=taken, mine=active is not None, can_wait=True,
+            credits=user.free_credits,
         ),
     )
 
@@ -227,7 +237,7 @@ async def job_view(
 
 # ================================================================ yozilish
 
-@router.callback_query(JobCB.filter(F.action == "apply"))
+@router.callback_query(JobCB.filter(F.action.in_({"apply", "credit"})))
 async def job_apply(
     call: CallbackQuery, callback_data: JobCB, state: FSMContext,
     session: AsyncSession, user: User, bot: Bot
@@ -239,8 +249,11 @@ async def job_apply(
         await call.answer("To'lov rekvizitlari sozlanmagan. Adminga xabar bering.", show_alert=True)
         return
 
+    use_credit = callback_data.action == "credit"
     try:
-        booking = await svc.apply_to_job(session, callback_data.job_id, user.id)
+        booking = await svc.apply_to_job(
+            session, callback_data.job_id, user.id, use_credit=use_credit
+        )
     except svc.ApplyError as e:
         await call.answer(str(e), show_alert=True)
         await show_job(call.message, session, user, callback_data.job_id)
@@ -249,9 +262,12 @@ async def job_apply(
     job = await svc.get_job(session, callback_data.job_id)
 
     if booking.status == BookingStatus.CONFIRMED:
-        # BEPUL e'lon — chek ham, moderatsiya ham kerak emas. Maxfiy
-        # ma'lumot va lokatsiya o'sha zahoti beriladi.
+        # BEPUL yoki BONUS — chek ham, moderatsiya ham kerak emas.
+        # Maxfiy ma'lumot va lokatsiya o'sha zahoti beriladi.
+        if booking.used_credit:
+            await call.message.answer(texts.credit_used(user.free_credits))
         await notifier.send_secret(bot, user.id, job)
+        await notifier.reward_referrer_if_first(bot, session, user.id)
         await call.answer("🎉 Yozildingiz!")
     else:
         # PULLI e'lon — chek kutish holatiga o'tamiz va ariza ID sini eslab
@@ -290,31 +306,134 @@ async def job_wait(
 
 @router.callback_query(JobCB.filter(F.action == "cancel"))
 async def job_cancel(
-    call: CallbackQuery, callback_data: JobCB, state: FSMContext,
-    session: AsyncSession, user: User, bot: Bot
+    call: CallbackQuery, callback_data: JobCB, session: AsyncSession, user: User
+) -> None:
+    """Bekor qilish. Ishga oz vaqt qolgan bo'lsa avval ogohlantiramiz.
+
+    Ilgari tasdiqlangan arizani umuman bekor qilib bo'lmasdi — natijada odam
+    shunchaki bormay qo'yardi va joy zoye ketardi. Endi bekor qila oladi,
+    lekin oqibatini OLDINDAN ko'radi va o'zi tanlaydi.
+    """
+    booking = await svc.active_booking(session, callback_data.job_id, user.id)
+    if booking is None:
+        await call.answer("Faol arizangiz yo'q.", show_alert=True)
+        return
+
+    job = await svc.get_job(session, callback_data.job_id)
+    if job and svc.is_late_cancel(job, booking):
+        minutes_left = max(int((job.starts_at - utcnow()).total_seconds() // 60), 0)
+        await call.message.answer(
+            texts.cancel_warning(job, minutes_left), reply_markup=cancel_confirm_kb(job.id)
+        )
+        await call.answer()
+        return
+
+    await _do_cancel(call, session, user, booking, late=False)
+
+
+@router.callback_query(JobCB.filter(F.action == "cancelyes"))
+async def job_cancel_confirm(
+    call: CallbackQuery, callback_data: JobCB, session: AsyncSession, user: User
 ) -> None:
     booking = await svc.active_booking(session, callback_data.job_id, user.id)
     if booking is None:
         await call.answer("Faol arizangiz yo'q.", show_alert=True)
         return
-    if booking.status == BookingStatus.CONFIRMED:
-        await call.answer(
-            "To'lov tasdiqlangan arizani bot orqali bekor qilib bo'lmaydi. "
-            "Administrator bilan bog'laning.",
-            show_alert=True,
-        )
+    job = await svc.get_job(session, callback_data.job_id)
+    late = bool(job and svc.is_late_cancel(job, booking))
+    await _do_cancel(call, session, user, booking, late=late)
+
+
+async def _do_cancel(
+    call: CallbackQuery, session: AsyncSession, user: User, booking, late: bool
+) -> None:  # noqa: ANN001
+    job_id = booking.job_id
+    await svc.cancel_booking(session, booking, late=late)
+    await call.answer("🚫 Bekor qilindi")
+    await call.message.answer(texts.CANCEL_LATE_DONE if late else texts.CANCEL_DONE)
+
+    job = await svc.get_job(session, job_id)
+    if job:
+        await publisher.sync_job_post(call.bot, session, job)
+        # Joy bo'shadi — navbatdagi birinchi odamga taklif yuboramiz.
+        await notifier.promote_and_notify(call.bot, session, job.id)
+        await show_job(call.message, session, user, job.id)
+
+
+# ================================================================ davomat
+
+@router.callback_query(AttendCB.filter())
+async def attendance_answer(
+    call: CallbackQuery, callback_data: AttendCB, session: AsyncSession, user: User
+) -> None:
+    """Ishchining «chiqdingizmi?» so'roviga javobi.
+
+    Bu o'z-o'zini baholash — odam yolg'on aytishi mumkin. Shuning uchun ish
+    muallifiga ham ro'yxat yuboriladi va uning qarori ustun turadi.
+    """
+    booking = await session.get(Booking, callback_data.booking_id)
+    if booking is None or booking.user_id != user.id:
+        await call.answer("Ariza topilmadi.", show_alert=True)
+        return
+    if booking.status not in (BookingStatus.CONFIRMED, BookingStatus.COMPLETED,
+                              BookingStatus.NO_SHOW):
+        await call.answer("Bu ariza bo'yicha belgilash mumkin emas.", show_alert=True)
         return
 
-    await svc.cancel_booking(session, booking)
-    await state.set_state(None)
-    await call.answer("🚫 Bekor qilindi")
+    if callback_data.action == "yes":
+        await svc.mark_completed(session, booking)
+        text = texts.ATTENDANCE_THANKS
+    else:
+        await svc.mark_no_show(session, booking)
+        text = texts.ATTENDANCE_NOSHOW
 
-    job = await svc.get_job(session, callback_data.job_id)
-    if job:
-        await publisher.sync_job_post(bot, session, job)
-        # Joy bo'shadi — navbatdagi birinchi odamga taklif yuboramiz.
-        await notifier.promote_and_notify(bot, session, job.id)
-        await show_job(call.message, session, user, job.id)
+    await call.answer("✅ Belgilandi")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.message.answer(text)
+
+
+# ================================================================ shikoyat
+
+@router.callback_query(JobCB.filter(F.action == "report"))
+async def report_start(
+    call: CallbackQuery, callback_data: JobCB, state: FSMContext
+) -> None:
+    await state.set_state(ReportFlow.text)
+    await state.update_data(report_job_id=callback_data.job_id)
+    await call.message.answer(texts.ASK_REPORT)
+    await call.answer()
+
+
+@router.message(Command("shikoyat"))
+async def report_command(message: Message, state: FSMContext) -> None:
+    await state.set_state(ReportFlow.text)
+    await state.update_data(report_job_id=None)
+    await message.answer(texts.ASK_REPORT)
+
+
+@router.message(ReportFlow.text, F.text)
+async def report_text(
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    text = clean(message.text, 2000)
+    if len(text) < 10:
+        await message.answer("❗️ Juda qisqa. Muammoni batafsilroq yozing.")
+        return
+
+    data = await state.get_data()
+    await state.set_state(None)
+    report = await reports.create(session, user.id, text, data.get("report_job_id"))
+
+    await message.answer(texts.REPORT_SENT)
+
+    full = await reports.get(session, report.id)
+    if full:
+        await publisher.notify_staff(
+            bot, session, texts.report_card(full), reply_markup=report_kb(full.id)
+        )
 
 
 # ================================================================ chek

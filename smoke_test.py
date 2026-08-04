@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta, timezone  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from bot import permissions as perms  # noqa: E402
+from bot.config import TZ  # noqa: E402
 from bot.config import settings as env_settings  # noqa: E402
 from bot.db.base import (  # noqa: E402
     SessionMaker,
@@ -53,6 +54,7 @@ from bot.db.models import (  # noqa: E402
 from bot.services import backup  # noqa: E402
 from bot.services import channels as ch  # noqa: E402
 from bot.services import jobs as svc  # noqa: E402
+from bot.services import reports  # noqa: E402
 from bot.services import settings_store as store  # noqa: E402
 
 OK, FAIL = "  ✓", "  ✗"
@@ -336,6 +338,191 @@ async def main() -> None:
         check("hudud bo'yicha filtr", all(uid != w1.id for uid in by_region))
         by_cat = await svc.audience(s, category="qurilish")
         check("kasb bo'yicha filtr", w2.id in by_cat and w1.id not in by_cat)
+
+        section("Eslatmalar")
+        await store.set_value(s, "remind_evening_hour", "0")   # doim yuborilsin
+        await store.set_value(s, "remind_before_minutes", "120")
+
+        tomorrow_job = Job(
+            category="yuk", title="Ertangi ish", description="eslatma testi",
+            secret_details="Manzil", region="Chilonzor",
+            work_date=date.today() + timedelta(days=1), start_time="08:00",
+            salary=200_000, fee=0, slots_total=5, created_by=1,
+        )
+        s.add(tomorrow_job)
+        await s.commit()
+        tb = await svc.apply_to_job(s, tomorrow_job.id, w3.id)
+        check("ertangi ishga yozildi", tb.status == BookingStatus.CONFIRMED)
+
+        evening = await svc.bookings_needing_reminder(s, "evening")
+        check("kechqurungi eslatma navbatga tushdi",
+              any(b.id == tb.id for b in evening))
+        await svc.mark_reminded(s, evening, "evening")
+        again = await svc.bookings_needing_reminder(s, "evening")
+        check("ikkinchi marta yuborilmaydi", not any(b.id == tb.id for b in again))
+
+        soon = await svc.bookings_needing_reminder(s, "soon")
+        check("hali erta -> tez orada eslatmasi yo'q",
+              not any(b.id == tb.id for b in soon))
+
+        # Ishni 1 soatdan keyinga surib qo'yamiz
+        tomorrow_job.work_date = date.today()
+        tomorrow_job.start_time = (datetime.now(TZ) + timedelta(hours=1)).strftime("%H:%M")
+        await s.commit()
+        soon = await svc.bookings_needing_reminder(s, "soon")
+        check("1 soat qolganda eslatma navbatga tushdi",
+              any(b.id == tb.id for b in soon))
+
+        section("Bekor qilish oynasi")
+        await store.set_value(s, "cancel_window_minutes", "180")
+        check("1 soat qolgan -> kech bekor qilish",
+              svc.is_late_cancel(tomorrow_job, tb))
+
+        far_job = Job(
+            category="yuk", title="Uzoq ish", description="test",
+            secret_details="Manzil", region="Chilonzor",
+            work_date=date.today() + timedelta(days=5), start_time="08:00",
+            salary=200_000, fee=0, slots_total=5, created_by=1,
+        )
+        s.add(far_job)
+        await s.commit()
+        fb2 = await svc.apply_to_job(s, far_job.id, w3.id)
+        check("5 kun qolgan -> oddiy bekor qilish",
+              not svc.is_late_cancel(far_job, fb2))
+
+        await svc.cancel_booking(s, fb2, late=False)
+        await s.refresh(w3)
+        check("o'z vaqtida bekor -> jazo yo'q", w3.no_show_count == 0)
+        check("oddiy bekor -> CANCELLED", fb2.status == BookingStatus.CANCELLED)
+
+        before = w3.no_show_count
+        await svc.cancel_booking(s, tb, late=True)
+        await s.refresh(w3)
+        check("kech bekor -> LATE_CANCEL", tb.status == BookingStatus.LATE_CANCEL)
+        check("kech bekor -> ko'rsatkichga yozildi", w3.no_show_count == before + 1)
+        check("kech bekorda joy BO'SHADI",
+              await svc.taken_count(s, tomorrow_job.id) == 0)
+
+        section("Davomat (ishga chiqdimi)")
+        await store.set_value(s, "attendance_after_hours", "5")
+        past_job = Job(
+            category="yuk", title="Kechagi ish", description="test",
+            secret_details="Manzil", region="Chilonzor",
+            work_date=date.today() - timedelta(days=1), start_time="08:00",
+            salary=200_000, fee=0, slots_total=5, created_by=1,
+        )
+        s.add(past_job)
+        await s.commit()
+        pb2 = Booking(job_id=past_job.id, user_id=w2.id, status=BookingStatus.CONFIRMED)
+        s.add(pb2)
+        await s.commit()
+
+        need = await svc.jobs_needing_attendance(s)
+        check("tugagan ish so'rov navbatiga tushdi",
+              any(j.id == past_job.id for j in need))
+        check("kelajakdagi ish tushmadi", not any(j.id == far_job.id for j in need))
+
+        to_ask = await svc.bookings_to_ask(s, past_job.id)
+        check("so'raladigan ariza topildi", len(to_ask) == 1)
+
+        w2_done_before = w2.completed_count
+        await svc.mark_completed(s, pb2)
+        await s.refresh(w2)
+        check("ishga chiqqan belgilandi", pb2.status == BookingStatus.COMPLETED)
+        check("ko'rsatkich oshdi", w2.completed_count == w2_done_before + 1)
+
+        await svc.mark_completed(s, pb2)
+        await s.refresh(w2)
+        check("ikki marta sanalmaydi", w2.completed_count == w2_done_before + 1)
+
+        w2_ns_before = w2.no_show_count
+        await svc.mark_no_show(s, pb2)
+        await s.refresh(w2)
+        check("qaroni o'zgartirish ko'rsatkichni to'g'riladi",
+              w2.completed_count == w2_done_before and w2.no_show_count == w2_ns_before + 1)
+
+        section("Referal")
+        await store.set_value(s, "referral_reward", "1")
+        inviter = User(id=701, full_name="Chaqiruvchi", phone="+998901010101",
+                       region="Chilonzor")
+        friend = User(id=702, full_name="Do'st", phone="+998902020202",
+                      region="Chilonzor")
+        s.add_all([inviter, friend])
+        await s.commit()
+
+        check("o'zini o'zi chaqira olmaydi",
+              not await svc.register_referral(s, inviter, inviter.id))
+        check("referal yozildi", await svc.register_referral(s, friend, inviter.id))
+        await s.refresh(inviter)
+        check("chaqirganlar soni oshdi", inviter.invited_count == 1)
+        check("mukofot hali yo'q", inviter.free_credits == 0)
+        check("ikkinchi marta yozilmaydi",
+              not await svc.register_referral(s, friend, inviter.id))
+
+        ref_job = Job(
+            category="yuk", title="Referal ishi", description="test",
+            secret_details="Manzil", region="Chilonzor",
+            work_date=date.today() + timedelta(days=2), start_time="08:00",
+            salary=200_000, fee=0, slots_total=5, created_by=1,
+        )
+        s.add(ref_job)
+        await s.commit()
+        await svc.apply_to_job(s, ref_job.id, friend.id)
+
+        result = await svc.reward_referrer(s, friend.id)
+        await s.refresh(inviter)
+        check("birinchi yozilishdan keyin mukofot berildi",
+              result is not None and inviter.free_credits == 1)
+        check("ikkinchi marta mukofot yo'q",
+              await svc.reward_referrer(s, friend.id) is None)
+
+        section("Bonus bilan bepul yozilish")
+        paid_job = Job(
+            category="yuk", title="Pulli ish", description="test",
+            secret_details="Manzil", region="Chilonzor",
+            work_date=date.today() + timedelta(days=2), start_time="08:00",
+            salary=200_000, fee=15_000, slots_total=5, created_by=1,
+        )
+        s.add(paid_job)
+        await s.commit()
+
+        cb = await svc.apply_to_job(s, paid_job.id, inviter.id, use_credit=True)
+        await s.refresh(inviter)
+        check("bonus bilan darhol tasdiqlandi", cb.status == BookingStatus.CONFIRMED)
+        check("bonus sarflandi", inviter.free_credits == 0)
+        check("bonus belgilandi", cb.used_credit is True)
+
+        paid_job2 = Job(
+            category="yuk", title="Pulli ish 2", description="test",
+            secret_details="Manzil", region="Chilonzor",
+            work_date=date.today() + timedelta(days=2), start_time="08:00",
+            salary=200_000, fee=15_000, slots_total=5, created_by=1,
+        )
+        s.add(paid_job2)
+        await s.commit()
+        try:
+            await svc.apply_to_job(s, paid_job2.id, inviter.id, use_credit=True)
+            check("bonus tugagach ishlatib bo'lmaydi", False)
+        except svc.ApplyError:
+            check("bonus tugagach ishlatib bo'lmaydi", True)
+
+        # Bepul e'longa bonus sarflanmaydi — shunchaki e'tiborsiz qoldiriladi
+        free_apply = await svc.apply_to_job(s, ref_job.id, w2.id, use_credit=True)
+        check("bepul ishga bonus sarflanmaydi", free_apply.used_credit is False)
+
+        st_mid = await svc.stats(s)
+        check("bonusli yozilish tushumga qo'shilmadi", st_mid["revenue"] == 10_000)
+
+        section("Shikoyat")
+        rep = await reports.create(s, w1.id, "Manzilda hech kim yo'q edi", ref_job.id)
+        check("murojaat yaratildi", rep.id > 0)
+        check("ochiq murojaatlar sanaldi", await reports.open_count(s) == 1)
+        loaded = await reports.get(s, rep.id)
+        check("muallif va e'lon yuklandi",
+              loaded.user.id == w1.id and loaded.job.id == ref_job.id)
+        await reports.answer(s, loaded, admin.id, "Uzr, tekshiramiz")
+        check("javob yozildi", loaded.status.value == "ANSWERED")
+        check("javobdan keyin ochiq emas", await reports.open_count(s) == 0)
 
         section("Ko'p kanal va filtrlash")
         c_all = await ch.add(s, -1001, "Umumiy kanal", "channel")

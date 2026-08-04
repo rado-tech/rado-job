@@ -18,6 +18,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from bot.callbacks import (
     AdminJobCB,
+    AttendCB,
     ChanCB,
     EditCB,
     FeedCB,
@@ -26,6 +27,7 @@ from bot.callbacks import (
     ModCB,
     NavCB,
     PickCB,
+    ReportCB,
     SetCB,
     StaffCB,
     WorkerCB,
@@ -59,6 +61,7 @@ BTN_STATS = "📊 Statistika"
 BTN_SETTINGS = "⚙️ Sozlamalar"
 BTN_USERS = "👥 Foydalanuvchilar"
 BTN_ADS = "📣 Reklama"
+BTN_REPORTS = "🆘 Murojaatlar"
 BTN_BACK = "⬅️ Orqaga"
 
 
@@ -100,6 +103,7 @@ def admin_menu(user: User | None = None) -> ReplyKeyboardMarkup:
     kb.button(text=BTN_NEW_JOB)
     kb.button(text=BTN_PAYMENTS)
     kb.button(text=BTN_REVIEW)
+    kb.button(text=BTN_REPORTS)
     kb.button(text=BTN_ALL_ADS)
     if full:
         kb.button(text=BTN_STATS)
@@ -107,7 +111,7 @@ def admin_menu(user: User | None = None) -> ReplyKeyboardMarkup:
         kb.button(text=BTN_USERS)
         kb.button(text=BTN_SETTINGS)
         kb.button(text=BTN_BACK)
-        kb.adjust(2, 2, 2, 2, 1)
+        kb.adjust(2, 2, 2, 2, 2)
     else:
         kb.button(text=BTN_BACK)
         kb.adjust(2, 2, 1)
@@ -243,13 +247,24 @@ def days_kb() -> InlineKeyboardMarkup:
 
 
 def job_view_kb(
-    job: Job, *, taken: int, mine: bool, can_wait: bool, confirmed: bool = False
+    job: Job,
+    *,
+    taken: int,
+    mine: bool,
+    can_wait: bool,
+    confirmed: bool = False,
+    credits: int = 0,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     free = job.slots_total - taken
 
     if confirmed:
-        pass  # tasdiqlangan ishchiga tugma kerak emas
+        kb.button(
+            text="🚫 Bekor qilish", callback_data=JobCB(action="cancel", job_id=job.id).pack()
+        )
+        kb.button(
+            text="🆘 Shikoyat", callback_data=JobCB(action="report", job_id=job.id).pack()
+        )
     elif mine:
         kb.button(
             text="🚫 Bekor qilish",
@@ -258,6 +273,13 @@ def job_view_kb(
     elif job.status == JobStatus.OPEN and free > 0:
         label = "🆓 Bepul yozilish" if job.fee <= 0 else f"✅ Yozilish · {money(job.fee)}"
         kb.button(text=label, callback_data=JobCB(action="apply", job_id=job.id).pack())
+        # Bonus bor va e'lon pulli — tanlov beramiz, avtomat sarflamaymiz.
+        # Odam bonusini qaysi ishga ishlatishni o'zi hal qilsin.
+        if job.fee > 0 and credits > 0:
+            kb.button(
+                text=f"🎁 Bonus bilan bepul ({credits} ta)",
+                callback_data=JobCB(action="credit", job_id=job.id).pack(),
+            )
     elif can_wait and job.status in (JobStatus.OPEN, JobStatus.FULL):
         kb.button(
             text="⏳ Navbatga yozilish (bepul)",
@@ -266,6 +288,33 @@ def job_view_kb(
 
     kb.button(text="⬅️ Ro'yxatga", callback_data=NavCB(to="feed").pack())
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def cancel_confirm_kb(job_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="✅ Ha, baribir bekor qilaman",
+        callback_data=JobCB(action="cancelyes", job_id=job_id).pack(),
+    )
+    kb.button(text="⬅️ Yo'q, qoldiraman", callback_data=JobCB(action="view", job_id=job_id).pack())
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def attendance_kb(booking_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Ha, chiqdim", callback_data=AttendCB(action="yes", booking_id=booking_id).pack())
+    kb.button(text="❌ Yo'q", callback_data=AttendCB(action="no", booking_id=booking_id).pack())
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def report_kb(report_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✍️ Javob berish", callback_data=ReportCB(action="answer", report_id=report_id).pack())
+    kb.button(text="✅ Yopish", callback_data=ReportCB(action="close", report_id=report_id).pack())
+    kb.adjust(2)
     return kb.as_markup()
 
 

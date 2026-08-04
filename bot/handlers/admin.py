@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.callbacks import AdminJobCB, WorkerCB
+from bot.callbacks import AdminJobCB, ReportCB, WorkerCB
 from bot.config import settings as env
 from bot.db.models import BookingStatus, JobStatus, Role, User
 from bot.keyboards import (
@@ -19,6 +19,7 @@ from bot.keyboards import (
     BTN_ALL_ADS,
     BTN_MY_ADS,
     BTN_PAYMENTS,
+    BTN_REPORTS,
     BTN_REVIEW,
     BTN_STATS,
     BTN_USERS,
@@ -26,13 +27,14 @@ from bot.keyboards import (
     admin_menu,
     job_review_kb,
     jobs_list_kb,
+    report_kb,
     worker_actions_kb,
 )
 from bot.permissions import IsAdmin, IsStaff, is_admin
 from bot.services import jobs as svc
-from bot.services import publisher
+from bot.services import publisher, reports
 from bot.services import settings_store as store
-from bot.states import Search
+from bot.states import ReportFlow, Search
 from bot.texts import money
 
 log = logging.getLogger(__name__)
@@ -205,6 +207,84 @@ async def review(message: Message, state: FSMContext, session: AsyncSession) -> 
         )
 
 
+# ================================================================ murojaatlar
+
+@router.message(F.text == BTN_REPORTS)
+@router.message(Command("murojaat"))
+async def reports_list(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await state.set_state(None)
+    items = await reports.open_reports(session)
+    if not items:
+        await message.answer("✅ Ochiq murojaat yo'q.")
+        return
+    await message.answer(f"🆘 <b>{len(items)} ta murojaat kutmoqda</b>")
+    for r in items:
+        await message.answer(texts.report_card(r), reply_markup=report_kb(r.id))
+
+
+@router.callback_query(ReportCB.filter(F.action == "close"))
+async def report_close(
+    call: CallbackQuery, callback_data: ReportCB, session: AsyncSession, user: User
+) -> None:
+    report = await reports.get(session, callback_data.report_id)
+    if report is None:
+        await call.answer("Topilmadi", show_alert=True)
+        return
+    await reports.close(session, report, user.id)
+    await call.answer("✅ Yopildi")
+    try:
+        await call.message.edit_text(
+            (call.message.text or "") + f"\n\n✅ <b>YOPILDI</b> — {user.full_name}",
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(ReportCB.filter(F.action == "answer"))
+async def report_answer_ask(
+    call: CallbackQuery, callback_data: ReportCB, state: FSMContext, session: AsyncSession
+) -> None:
+    report = await reports.get(session, callback_data.report_id)
+    if report is None:
+        await call.answer("Topilmadi", show_alert=True)
+        return
+    await state.set_state(ReportFlow.answer)
+    await state.update_data(report_id=report.id, src_message_id=call.message.message_id)
+    await call.message.answer(texts.ASK_REPORT_ANSWER)
+    await call.answer()
+
+
+@router.message(ReportFlow.answer, F.text)
+async def report_answer_send(
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    data = await state.get_data()
+    await state.set_state(None)
+
+    report = await reports.get(session, data.get("report_id", 0))
+    if report is None:
+        await message.answer("Murojaat topilmadi.")
+        return
+
+    answer = message.text.strip()[:2000]
+    await reports.answer(session, report, user.id, answer)
+
+    try:
+        await bot.send_message(report.user_id, texts.report_answer(answer))
+        await message.answer(f"✅ Javob yuborildi (murojaat #{report.id}).")
+    except Exception as e:
+        await message.answer(f"⚠️ Javob yetib bormadi: {e}"[:300])
+
+    if src := data.get("src_message_id"):
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=src, reply_markup=None
+            )
+        except Exception:
+            pass
+
+
 # ================================================================ statistika
 
 # Moliyaviy ma'lumot faqat adminga — moderator tushumni ko'rmaydi.
@@ -213,15 +293,23 @@ async def review(message: Message, state: FSMContext, session: AsyncSession) -> 
 async def stats(message: Message, state: FSMContext, session: AsyncSession) -> None:
     await state.set_state(None)
     s = await svc.stats(session)
+    open_reports = await reports.open_count(session)
+    done = s["completed"]
+    total_marked = done + s["no_show"]
+    rate = f"{done * 100 // total_marked}%" if total_marked else "—"
+
     await message.answer(
         "📊 <b>Statistika</b>\n\n"
         f"👤 Foydalanuvchi: <b>{s['users']}</b> (faol: {s['active']})\n"
         f"   🔎 ishchi: {s['workers']} · 🏢 ish beruvchi: {s['employers']}\n\n"
         f"📢 Jami e'lon: <b>{s['jobs']}</b>\n"
         f"   🟢 ochiq: {s['open_jobs']} · 🕓 tasdiq kutmoqda: {s['review_jobs']}\n\n"
-        f"✅ Tasdiqlangan yozilish: <b>{s['confirmed']}</b>\n"
-        f"🔎 Tekshiruvda: <b>{s['waiting']}</b>\n"
-        f"⏳ Navbatda: <b>{s['waitlist']}</b>\n\n"
+        f"✅ Tasdiqlangan: <b>{s['confirmed']}</b>\n"
+        f"🏁 Ishga chiqqan: <b>{done}</b> · 🚷 chiqmagan: <b>{s['no_show']}</b>\n"
+        f"📈 Chiqish darajasi: <b>{rate}</b>\n"
+        f"🔎 Tekshiruvda: {s['waiting']} · ⏳ navbatda: {s['waitlist']}\n"
+        f"🎁 Bonus bilan: {s['credits_used']}\n"
+        f"🆘 Ochiq murojaat: <b>{open_reports}</b>\n\n"
         f"💰 Yig'ilgan to'lov: <b>{money(s['revenue'])}</b>"
     )
 

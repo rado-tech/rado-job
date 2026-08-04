@@ -14,8 +14,20 @@ from aiogram.filters.callback_data import CallbackData
 
 
 class JobCB(CallbackData, prefix="j"):
-    action: str  # view | apply | wait | cancel
+    action: str  # view | apply | credit | wait | cancel | cancelyes | report
     job_id: int
+
+
+class AttendCB(CallbackData, prefix="at"):
+    """Ish tugagach: «chiqdingizmi?» so'roviga javob."""
+
+    action: str  # yes | no
+    booking_id: int
+
+
+class ReportCB(CallbackData, prefix="rp"):
+    action: str  # answer | close
+    report_id: int
 
 
 class FeedCB(CallbackData, prefix="f"):
