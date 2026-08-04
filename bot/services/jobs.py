@@ -31,6 +31,7 @@ from bot.db.models import (
     utcnow,
 )
 from bot.services import settings_store as store
+from bot.utils import local_today
 
 # Bir vaqtda ikki kishi oxirgi bitta joyga bosishi mumkin. Ikkalasi ham
 # "bo'sh joy bor" deb ko'rib, ikkalasiga ham joy berilishi mumkin edi —
@@ -173,7 +174,7 @@ async def feed(
 ) -> tuple[list[Job], int]:
     """Ishchi ko'radigan e'lonlar ro'yxati + umumiy soni (sahifalash uchun)."""
     statuses = [JobStatus.OPEN, JobStatus.FULL] if include_full else [JobStatus.OPEN]
-    conditions = [Job.status.in_(statuses), Job.work_date >= date.today()]
+    conditions = [Job.status.in_(statuses), Job.work_date >= local_today()]
     if region:
         conditions.append(Job.region == region)
     if category:
@@ -238,7 +239,7 @@ async def apply_to_job(
         job = await _fresh_job(session, job_id)
         if job.status != JobStatus.OPEN:
             raise ApplyError("Bu e'longa yozilish yopilgan.")
-        if job.work_date < date.today():
+        if job.work_date < local_today():
             raise ApplyError("Bu ishning sanasi o'tib ketgan.")
 
         existing = await get_booking(session, job_id, user_id)
@@ -314,7 +315,7 @@ async def join_waitlist(session: AsyncSession, job_id: int, user_id: int) -> Boo
         job = await _fresh_job(session, job_id)
         if job.status not in (JobStatus.OPEN, JobStatus.FULL):
             raise ApplyError("Bu e'lon yopilgan.")
-        if job.work_date < date.today():
+        if job.work_date < local_today():
             raise ApplyError("Bu ishning sanasi o'tib ketgan.")
 
         existing = await get_booking(session, job_id, user_id)
@@ -560,7 +561,7 @@ async def bookings_needing_reminder(session: AsyncSession, kind: str) -> list[Bo
         .where(
             Booking.status == BookingStatus.CONFIRMED,
             flag.is_(False),
-            Job.work_date >= date.today(),
+            Job.work_date >= local_today(),
             Job.status.in_([JobStatus.OPEN, JobStatus.FULL]),
         )
         .limit(500)
@@ -602,7 +603,7 @@ async def jobs_needing_attendance(session: AsyncSession) -> list[Job]:
     now = utcnow()
     stmt = (
         select(Job)
-        .where(Job.attendance_asked.is_(False), Job.work_date <= date.today())
+        .where(Job.attendance_asked.is_(False), Job.work_date <= local_today())
         .limit(100)
     )
     jobs = list((await session.scalars(stmt)).all())
@@ -651,7 +652,7 @@ async def expire_holds(session: AsyncSession) -> list[Booking]:
 async def close_past_jobs(session: AsyncSession) -> list[Job]:
     stmt = select(Job).where(
         Job.status.in_([JobStatus.OPEN, JobStatus.FULL, JobStatus.PENDING_REVIEW]),
-        Job.work_date < date.today(),
+        Job.work_date < local_today(),
     )
     jobs = list((await session.scalars(stmt)).all())
     for j in jobs:

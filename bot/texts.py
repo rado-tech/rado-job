@@ -10,6 +10,7 @@ from datetime import date
 
 from bot.config import category_name
 from bot.db.models import Booking, BookingStatus, Job, JobStatus, User
+from bot.utils import local_today
 
 WEEKDAYS = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"]
 MONTHS = [
@@ -23,7 +24,7 @@ def money(v: int) -> str:
 
 
 def fmt_date(d: date) -> str:
-    today = date.today()
+    today = local_today()
     delta = (d - today).days
     if delta == 0:
         return f"Bugun, {d.day}-{MONTHS[d.month - 1]}"
@@ -33,7 +34,7 @@ def fmt_date(d: date) -> str:
 
 
 def short_date(d: date) -> str:
-    delta = (d - date.today()).days
+    delta = (d - local_today()).days
     if delta == 0:
         return "Bugun"
     if delta == 1:

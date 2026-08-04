@@ -43,6 +43,7 @@ from bot.config import (
 from bot.db.models import Channel, Job, JobStatus, Role, User
 from bot.permissions import is_admin, is_staff
 from bot.texts import job_row, money, short_date
+from bot.utils import local_today
 
 # ---------------------------------------------------------------- reply
 
@@ -238,7 +239,7 @@ def feed_kb(
 def days_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🌐 Barcha kunlar", callback_data=PickCB(field="fday", value="*").pack())
-    today = date.today()
+    today = local_today()
     for i in range(7):
         d = today + timedelta(days=i)
         kb.button(text=short_date(d), callback_data=PickCB(field="fday", value=d.isoformat()).pack())
@@ -380,7 +381,7 @@ def fee_kb(default_fee: int) -> InlineKeyboardMarkup:
 
 def dates_kb(field: str = "date") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    today = date.today()
+    today = local_today()
     for i in range(8):
         d = today + timedelta(days=i)
         kb.button(text=short_date(d), callback_data=PickCB(field=field, value=d.isoformat()).pack())
