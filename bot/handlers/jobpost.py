@@ -48,7 +48,7 @@ from bot.services import jobs as svc
 from bot.services import publisher
 from bot.services import settings_store as store
 from bot.states import NewJob
-from bot.utils import clean, parse_date, parse_int, parse_time
+from bot.utils import clean, local_today, parse_date, parse_int, parse_time
 
 log = logging.getLogger(__name__)
 router = Router(name="jobpost")
@@ -292,7 +292,7 @@ async def s_date_text(message: Message, state: FSMContext, user: User) -> None:
     if d is None:
         await message.answer(texts.BAD_DATE)
         return
-    if d < date.today():
+    if d < local_today():
         await message.answer("❗️ O'tib ketgan sanaga e'lon berib bo'lmaydi.")
         return
     await state.update_data(work_date=d.isoformat())

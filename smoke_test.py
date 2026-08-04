@@ -56,6 +56,7 @@ from bot.services import channels as ch  # noqa: E402
 from bot.services import jobs as svc  # noqa: E402
 from bot.services import reports  # noqa: E402
 from bot.services import settings_store as store  # noqa: E402
+from bot.utils import local_today  # noqa: E402
 
 OK, FAIL = "  ✓", "  ✗"
 failures = 0
@@ -124,12 +125,23 @@ async def main() -> None:
             category="yuk", title="Omborga yuk tashish",
             description="8 soat, baquvvat erkaklar kerak",
             secret_details="Chilonzor 19, Aziz aka +998901234567",
-            region="Chilonzor", work_date=date.today() + timedelta(days=1),
+            region="Chilonzor", work_date=local_today() + timedelta(days=1),
             start_time="08:00", salary=200_000, fee=10_000, slots_total=2,
             created_by=1,
         )
         s.add(job)
         await s.commit()
+
+        section("Vaqt zonasi (server UTC da ishlaydi)")
+        # Railway va aksariyat VPS UTC da ishlaydi. Toshkentda soat 01:30
+        # bo'lganda UTC hali kechagi kun — agar kod server sanasiga tayansa,
+        # e'lonlar bir kun kech yopiladi va «Bugun/Ertaga» xato chiqadi.
+        utc_kech = datetime(2026, 8, 4, 20, 30, tzinfo=timezone.utc)
+        check("UTC va Toshkent sanasi farq qiladi",
+              utc_kech.date() == date(2026, 8, 4)
+              and utc_kech.astimezone(TZ).date() == date(2026, 8, 5))
+        check("local_today() Toshkent bo'yicha",
+              local_today() == datetime.now(TZ).date())
 
         section("Yozilish va joy hisobi")
         b1 = await svc.apply_to_job(s, job.id, w1.id)
@@ -194,7 +206,7 @@ async def main() -> None:
         section("Bir vaqtda yozilish (race condition)")
         job2 = Job(
             category="qurilish", title="Bitta joy", description="test",
-            secret_details="test", region="Chilonzor", work_date=date.today(),
+            secret_details="test", region="Chilonzor", work_date=local_today(),
             start_time="09:00", salary=100_000, fee=10_000, slots_total=1,
             created_by=1,
         )
@@ -221,7 +233,7 @@ async def main() -> None:
         check("hudud bo'yicha filtr", only_chilonzor == 2)
         _, only_yuk = await svc.feed(s, category="yuk", include_full=True)
         check("kasb bo'yicha filtr", only_yuk == 1)
-        _, tomorrow = await svc.feed(s, day=date.today() + timedelta(days=1), include_full=True)
+        _, tomorrow = await svc.feed(s, day=local_today() + timedelta(days=1), include_full=True)
         check("sana bo'yicha filtr", tomorrow == 1)
         page1, _ = await svc.feed(s, include_full=True, offset=0, limit=1)
         page2, _ = await svc.feed(s, include_full=True, offset=1, limit=1)
@@ -243,7 +255,7 @@ async def main() -> None:
         emp_job = Job(
             category="tozalash", title="Ofis tozalash", description="4 soatlik ish",
             secret_details="Yunusobod 5, Dilnoza opa +998901112233",
-            region="Yunusobod", work_date=date.today() + timedelta(days=2),
+            region="Yunusobod", work_date=local_today() + timedelta(days=2),
             start_time="10:00", salary=150_000, fee=10_000, slots_total=3,
             status=JobStatus.PENDING_REVIEW, created_by=emp.id,
         )
@@ -264,7 +276,7 @@ async def main() -> None:
         free_job = Job(
             category="tozalash", title="Bepul ish", description="tekshiruv uchun",
             secret_details="Manzil, Aziz aka +998901112233",
-            region="Chilonzor", work_date=date.today() + timedelta(days=3),
+            region="Chilonzor", work_date=local_today() + timedelta(days=3),
             start_time="09:00", salary=150_000, fee=0, slots_total=1,
             created_by=1,
         )
@@ -288,13 +300,13 @@ async def main() -> None:
         free2 = Job(
             category="tozalash", title="Bepul 2", description="test",
             secret_details="test", region="Chilonzor",
-            work_date=date.today() + timedelta(days=3), start_time="09:00",
+            work_date=local_today() + timedelta(days=3), start_time="09:00",
             salary=150_000, fee=0, slots_total=5, created_by=1,
         )
         paid2 = Job(
             category="tozalash", title="Pulli 2", description="test",
             secret_details="test", region="Chilonzor",
-            work_date=date.today() + timedelta(days=3), start_time="09:00",
+            work_date=local_today() + timedelta(days=3), start_time="09:00",
             salary=150_000, fee=10_000, slots_total=5, created_by=1,
         )
         s.add_all([free2, paid2])
@@ -346,7 +358,7 @@ async def main() -> None:
         tomorrow_job = Job(
             category="yuk", title="Ertangi ish", description="eslatma testi",
             secret_details="Manzil", region="Chilonzor",
-            work_date=date.today() + timedelta(days=1), start_time="08:00",
+            work_date=local_today() + timedelta(days=1), start_time="08:00",
             salary=200_000, fee=0, slots_total=5, created_by=1,
         )
         s.add(tomorrow_job)
@@ -366,8 +378,9 @@ async def main() -> None:
               not any(b.id == tb.id for b in soon))
 
         # Ishni 1 soatdan keyinga surib qo'yamiz
-        tomorrow_job.work_date = date.today()
-        tomorrow_job.start_time = (datetime.now(TZ) + timedelta(hours=1)).strftime("%H:%M")
+        target = datetime.now(TZ) + timedelta(hours=1)
+        tomorrow_job.work_date = target.date()
+        tomorrow_job.start_time = target.strftime("%H:%M")
         await s.commit()
         soon = await svc.bookings_needing_reminder(s, "soon")
         check("1 soat qolganda eslatma navbatga tushdi",
@@ -381,7 +394,7 @@ async def main() -> None:
         far_job = Job(
             category="yuk", title="Uzoq ish", description="test",
             secret_details="Manzil", region="Chilonzor",
-            work_date=date.today() + timedelta(days=5), start_time="08:00",
+            work_date=local_today() + timedelta(days=5), start_time="08:00",
             salary=200_000, fee=0, slots_total=5, created_by=1,
         )
         s.add(far_job)
@@ -408,7 +421,7 @@ async def main() -> None:
         past_job = Job(
             category="yuk", title="Kechagi ish", description="test",
             secret_details="Manzil", region="Chilonzor",
-            work_date=date.today() - timedelta(days=1), start_time="08:00",
+            work_date=local_today() - timedelta(days=1), start_time="08:00",
             salary=200_000, fee=0, slots_total=5, created_by=1,
         )
         s.add(past_job)
@@ -462,7 +475,7 @@ async def main() -> None:
         ref_job = Job(
             category="yuk", title="Referal ishi", description="test",
             secret_details="Manzil", region="Chilonzor",
-            work_date=date.today() + timedelta(days=2), start_time="08:00",
+            work_date=local_today() + timedelta(days=2), start_time="08:00",
             salary=200_000, fee=0, slots_total=5, created_by=1,
         )
         s.add(ref_job)
@@ -480,7 +493,7 @@ async def main() -> None:
         paid_job = Job(
             category="yuk", title="Pulli ish", description="test",
             secret_details="Manzil", region="Chilonzor",
-            work_date=date.today() + timedelta(days=2), start_time="08:00",
+            work_date=local_today() + timedelta(days=2), start_time="08:00",
             salary=200_000, fee=15_000, slots_total=5, created_by=1,
         )
         s.add(paid_job)
@@ -495,7 +508,7 @@ async def main() -> None:
         paid_job2 = Job(
             category="yuk", title="Pulli ish 2", description="test",
             secret_details="Manzil", region="Chilonzor",
-            work_date=date.today() + timedelta(days=2), start_time="08:00",
+            work_date=local_today() + timedelta(days=2), start_time="08:00",
             salary=200_000, fee=15_000, slots_total=5, created_by=1,
         )
         s.add(paid_job2)

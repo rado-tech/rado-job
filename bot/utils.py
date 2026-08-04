@@ -5,6 +5,21 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 
+from bot.config import TZ
+
+
+def local_today() -> date:
+    """Bugungi sana — TOSHKENT bo'yicha.
+
+    Nega oddiy date.today() emas? U server soatiga qaraydi. Server esa
+    (Railway, ko'pchilik VPS) UTC da ishlaydi. Toshkentda soat 00:30
+    bo'lganda UTC hali kechagi kun — natijada e'lonlar bir kun kech
+    yopiladi va «Bugun/Ertaga» yorliqlari xato chiqadi.
+
+    Foydalanuvchi Toshkentda yashaydi, demak "bugun" ham Toshkent bo'yicha.
+    """
+    return datetime.now(TZ).date()
+
 
 def parse_int(text: str) -> int | None:
     """'200 000', '200.000', '200000 so'm' -> 200000"""
@@ -26,7 +41,7 @@ def parse_time(text: str) -> str | None:
 def parse_date(text: str) -> date | None:
     """Bir nechta ko'rinishni tushunadi — admin tez yozadi, format o'ylamaydi."""
     t = (text or "").strip().lower()
-    today = date.today()
+    today = local_today()
     if t in ("bugun", "bugun."):
         return today
     if t in ("ertaga", "erta"):

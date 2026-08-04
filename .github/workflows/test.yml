@@ -1,0 +1,53 @@
+# Har safar kod GitHub'ga yuborilganda testlar AVTOMAT ishga tushadi.
+#
+# PR ochsangiz — natija PR sahifasida ✅ yoki ❌ bo'lib chiqadi va xato
+# bo'lsa merge qilishdan oldin ko'rasiz. Bu ayniqsa muhim, chunki Railway
+# `main` ga tushgan kodni darhol deploy qiladi: buzuq kod to'g'ridan-to'g'ri
+# ishlab turgan botga chiqib ketmasligi kerak.
+#
+# Bu yerda hech qanday maxfiy ma'lumot kerak emas: testlar Telegramga
+# ulanmaydi, o'z ichida namuna token va vaqtinchalik baza ishlatadi.
+
+name: Testlar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # GitHub sahifasidan qo'lda ishga tushirish uchun
+
+jobs:
+  test:
+    name: Testlar (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Kodni olish
+        uses: actions/checkout@v4
+
+      - name: Python o'rnatish
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Kutubxonalarni o'rnatish
+        run: pip install -r requirements.txt
+
+      - name: Yig'ilish testi
+        # Import xatolari, handler'lar, tugmalar, maxfiylik, parserlar
+        run: python wiring_test.py
+
+      - name: Biznes mantiq testlari
+        # Joy hisobi, navbat, bron muddati, bepul rejim, referal, shikoyat
+        run: python smoke_test.py
+
+      - name: Maxfiy ma'lumot sizib chiqmaganini tekshirish
+        # .env yoki baza tasodifan git'ga tushib qolmasin
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$|\.db$'; then
+            echo "🚨 Maxfiy fayl repozitoriyada!"
+            exit 1
+          fi
+          echo "✓ .env va baza fayllari repozitoriyada yo'q"
