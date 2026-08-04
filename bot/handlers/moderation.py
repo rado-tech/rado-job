@@ -1,0 +1,263 @@
+"""To'lov cheklarini va ish beruvchi e'lonlarini tasdiqlash / rad etish.
+
+Bu — tizimdagi eng muhim tugma. Admin chekni ko'radi va bir bosishda hal
+qiladi; qolgan hamma narsa (maxfiy ma'lumotni yuborish, joyni bo'shatish,
+navbatdagini chaqirish, kanaldagi postni yangilash) avtomat bajariladi.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from aiogram import Bot, F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from bot import texts
+from bot.callbacks import JobModCB, ModCB
+from bot.db.models import Booking, BookingStatus, JobStatus, User
+from bot.permissions import IsStaff
+from bot.services import jobs as svc
+from bot.services import notifier, publisher
+from bot.states import Moderation
+
+log = logging.getLogger(__name__)
+router = Router(name="moderation")
+
+# Chek tekshirish — moderatorlar ham qila oladi.
+router.message.filter(IsStaff())
+router.callback_query.filter(IsStaff())
+
+
+async def _load(session: AsyncSession, booking_id: int) -> Booking | None:
+    return await session.scalar(
+        select(Booking)
+        .options(selectinload(Booking.job), selectinload(Booking.user))
+        .where(Booking.id == booking_id)
+    )
+
+
+async def _mark_done(call: CallbackQuery, suffix: str) -> None:
+    """Chek rasmining tagidagi yozuvni yangilab, tugmalarni olib tashlaydi.
+
+    Shunda ikkinchi admin xuddi shu chekni qayta ko'rib chiqmaydi.
+    """
+    try:
+        if call.message.caption is not None:
+            await call.message.edit_caption(
+                caption=call.message.caption + suffix, reply_markup=None
+            )
+        else:
+            await call.message.edit_text(
+                (call.message.text or "") + suffix, reply_markup=None
+            )
+    except Exception as e:
+        log.debug("Xabar yangilanmadi: %s", e)
+
+
+# ================================================================ chek
+
+@router.callback_query(ModCB.filter(F.action == "ok"))
+async def approve(
+    call: CallbackQuery, callback_data: ModCB, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    booking = await _load(session, callback_data.booking_id)
+    if booking is None:
+        await call.answer("Ariza topilmadi.", show_alert=True)
+        return
+    if booking.status != BookingStatus.RECEIPT_SENT:
+        await call.answer(
+            f"Allaqachon ko'rib chiqilgan: {texts.BOOKING_STATUS_LABEL[booking.status]}",
+            show_alert=True,
+        )
+        await _mark_done(call, "")
+        return
+
+    await svc.confirm_booking(session, booking, user.id)
+
+    # Ishchiga maxfiy ma'lumot + xarita nuqtasi — mana shu uchun u pul to'lagan.
+    try:
+        await notifier.send_secret(bot, booking.user_id, booking.job)
+    except Exception as e:
+        log.warning("Ishchiga xabar yuborilmadi %s: %s", booking.user_id, e)
+        await call.message.answer(
+            f"⚠️ Tasdiqlandi, lekin ishchiga xabar bormadi (botni bloklagan "
+            f"bo'lishi mumkin).\n📱 <code>{booking.user.phone}</code>"
+        )
+
+    await _mark_done(call, f"\n\n✅ <b>TASDIQLANDI</b> — {user.full_name}")
+    await call.answer("✅ Tasdiqlandi")
+    await publisher.sync_job_post(bot, session, booking.job)
+
+
+@router.callback_query(ModCB.filter(F.action == "no"))
+async def reject_ask(
+    call: CallbackQuery, callback_data: ModCB, state: FSMContext, session: AsyncSession
+) -> None:
+    booking = await _load(session, callback_data.booking_id)
+    if booking is None:
+        await call.answer("Ariza topilmadi.", show_alert=True)
+        return
+    if booking.status != BookingStatus.RECEIPT_SENT:
+        await call.answer("Allaqachon ko'rib chiqilgan.", show_alert=True)
+        await _mark_done(call, "")
+        return
+
+    await state.set_state(Moderation.reject_reason)
+    await state.update_data(booking_id=booking.id, mod_message_id=call.message.message_id)
+    await call.message.answer(texts.ASK_REJECT_REASON)
+    await call.answer()
+
+
+# Filtrni DEKORATORGA yozamiz, handler ichida "if state != ..." tekshirmaymiz.
+# Sababi: aiogram'da handler bir marta ishga tushsa, xabar boshqa
+# handler'larga umuman o'tmaydi — ichkarida `return` qilsak admin yozgan
+# har qanday matn shu yerda yo'qolib ketardi.
+@router.message(Moderation.reject_reason, Command("skip"))
+async def reject_no_reason(
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    await _do_reject(message, state, session, user, bot, reason=None)
+
+
+@router.message(Moderation.reject_reason, F.text)
+async def reject_with_reason(
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    await _do_reject(message, state, session, user, bot, reason=message.text.strip()[:250])
+
+
+async def _do_reject(
+    message: Message, state: FSMContext, session: AsyncSession,
+    user: User, bot: Bot, reason: str | None,
+) -> None:
+    data = await state.get_data()
+    await state.set_state(None)
+
+    booking = await _load(session, data.get("booking_id", 0))
+    if booking is None or booking.status != BookingStatus.RECEIPT_SENT:
+        await message.answer("Ariza topilmadi yoki allaqachon hal qilingan.")
+        return
+
+    await svc.reject_booking(session, booking, user.id, reason)
+
+    try:
+        await bot.send_message(booking.user_id, texts.booking_rejected(booking.job, reason))
+    except Exception as e:
+        log.warning("Rad etish xabari yetmadi %s: %s", booking.user_id, e)
+
+    await message.answer(
+        f"❌ Ariza #{booking.id} rad etildi. Joy bo'shatildi."
+        + (f"\nSabab: <i>{reason}</i>" if reason else "")
+    )
+
+    if mod_msg_id := data.get("mod_message_id"):
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=mod_msg_id, reply_markup=None
+            )
+        except Exception:
+            pass
+
+    await publisher.sync_job_post(bot, session, booking.job)
+    # Joy bo'shadi — navbatdagi birinchi odamga taklif ketadi.
+    await notifier.promote_and_notify(bot, session, booking.job_id)
+
+
+# ================================================================ e'lon tasdiqlash
+
+@router.callback_query(JobModCB.filter(F.action == "ok"))
+async def approve_job(
+    call: CallbackQuery, callback_data: JobModCB, session: AsyncSession, bot: Bot
+) -> None:
+    job = await svc.get_job(session, callback_data.job_id)
+    if job is None:
+        await call.answer("E'lon topilmadi.", show_alert=True)
+        return
+    if job.status != JobStatus.PENDING_REVIEW:
+        await call.answer("Bu e'lon allaqachon ko'rib chiqilgan.", show_alert=True)
+        await _mark_done(call, "")
+        return
+
+    job.status = JobStatus.OPEN
+    await session.commit()
+
+    await _mark_done(call, "\n\n✅ <b>TASDIQLANDI</b>")
+    await call.answer("✅ Tasdiqlandi")
+
+    try:
+        await bot.send_message(
+            job.created_by,
+            f"✅ <b>«{job.title}»</b> e'loningiz tasdiqlandi va joylandi!",
+        )
+    except Exception:
+        pass
+
+    from bot.handlers.jobpost import publish_and_notify
+
+    await publish_and_notify(bot, session, job, report_to=call.from_user.id)
+
+
+@router.callback_query(JobModCB.filter(F.action == "no"))
+async def decline_job_ask(
+    call: CallbackQuery, callback_data: JobModCB, state: FSMContext, session: AsyncSession
+) -> None:
+    job = await svc.get_job(session, callback_data.job_id)
+    if job is None or job.status != JobStatus.PENDING_REVIEW:
+        await call.answer("E'lon topilmadi yoki hal qilingan.", show_alert=True)
+        return
+    await state.set_state(Moderation.decline_reason)
+    await state.update_data(job_id=job.id, mod_message_id=call.message.message_id)
+    await call.message.answer(texts.ASK_DECLINE_REASON)
+    await call.answer()
+
+
+@router.message(Moderation.decline_reason, Command("skip"))
+async def decline_no_reason(
+    message: Message, state: FSMContext, session: AsyncSession, bot: Bot
+) -> None:
+    await _do_decline(message, state, session, bot, None)
+
+
+@router.message(Moderation.decline_reason, F.text)
+async def decline_with_reason(
+    message: Message, state: FSMContext, session: AsyncSession, bot: Bot
+) -> None:
+    await _do_decline(message, state, session, bot, message.text.strip()[:250])
+
+
+async def _do_decline(
+    message: Message, state: FSMContext, session: AsyncSession, bot: Bot, reason: str | None
+) -> None:
+    data = await state.get_data()
+    await state.set_state(None)
+
+    job = await svc.get_job(session, data.get("job_id", 0))
+    if job is None or job.status != JobStatus.PENDING_REVIEW:
+        await message.answer("E'lon topilmadi yoki allaqachon hal qilingan.")
+        return
+
+    job.status = JobStatus.DECLINED
+    job.decline_reason = reason
+    await session.commit()
+
+    try:
+        text = f"❌ <b>«{job.title}»</b> e'loningiz rad etildi."
+        if reason:
+            text += f"\n\nSabab: <i>{reason}</i>"
+        await bot.send_message(job.created_by, text)
+    except Exception:
+        pass
+
+    await message.answer(f"❌ E'lon #{job.id} rad etildi.")
+    if mod_msg_id := data.get("mod_message_id"):
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=mod_msg_id, reply_markup=None
+            )
+        except Exception:
+            pass

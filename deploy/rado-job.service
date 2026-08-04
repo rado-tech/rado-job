@@ -1,0 +1,52 @@
+# Linux VPS uchun systemd xizmati.
+#
+# O'rnatish:
+#   sudo cp deploy/rado-job.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rado-job
+#
+# Boshqarish:
+#   sudo systemctl status rado-job     # holati
+#   sudo systemctl restart rado-job    # qayta ishga tushirish
+#   sudo journalctl -u rado-job -f     # jonli jurnal
+#
+# Yo'llarni o'zingiznikiga moslang (User, WorkingDirectory, ExecStart).
+
+[Unit]
+Description=Rado Job Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rado
+WorkingDirectory=/home/rado/rado-job
+ExecStart=/home/rado/rado-job/.venv/bin/python -m bot
+
+# ENG MUHIM QATOR: dastur qanday sababdan qulasa ham 10 soniyada
+# o'zi qayta ko'tariladi. Server qayta yuklansa ham (enable tufayli).
+Restart=always
+RestartSec=10
+
+# Ketma-ket qulashda cheksiz aylanib qolmasin: 5 daqiqada 10 martadan
+# ko'p qulasa to'xtaydi va siz jurnaldan sababini ko'rasiz.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# To'xtatishda botga o'zini yig'ishtirishga vaqt beramiz (WAL ni bazaga
+# ko'chirish, ulanishlarni yopish).
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+# Xavfsizlik: bot faqat o'z papkasiga yoza oladi.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/rado/rado-job
+
+[Install]
+WantedBy=multi-user.target
