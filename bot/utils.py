@@ -21,6 +21,17 @@ def local_today() -> date:
     return datetime.now(TZ).date()
 
 
+def local_now_hhmm() -> str:
+    """Hozirgi vaqt "HH:MM" ko'rinishida, Toshkent bo'yicha.
+
+    Bazada start_time matn sifatida saqlanadi va doim nol bilan
+    to'ldiriladi ("08:00"). Shu sababli oddiy matn taqqoslash ("18:00" >
+    "08:00") vaqt taqqoslashi bilan bir xil natija beradi — SQL so'rovida
+    ham ishlaydi.
+    """
+    return datetime.now(TZ).strftime("%H:%M")
+
+
 def parse_int(text: str) -> int | None:
     """'200 000', '200.000', '200000 so'm' -> 200000"""
     digits = re.sub(r"\D", "", text or "")

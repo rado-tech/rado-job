@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 
@@ -28,13 +28,15 @@ from bot.services import notifier, publisher
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 60
-BACKUP_HOUR = 4  # Toshkent vaqti bilan tunda — yuklama eng kam paytda
+BACKUP_HOUR = 4    # Toshkent vaqti bilan tunda — yuklama eng kam paytda
+REPORT_HOUR = 21   # Kunlik hisobot: ertangi bo'sh joylarni ko'rish uchun kech
 
 
 async def run(bot: Bot) -> None:
     # Bot endigina ko'tarildi — Telegram bilan aloqa o'rnashsin.
     await asyncio.sleep(5)
     last_backup_day: str | None = None
+    last_report_day: str | None = None
 
     # Bot 04:00 da o'chib turgan bo'lsa o'sha kunlik zaxira o'tkazib
     # yuborilardi. Shuning uchun ishga tushganda ham tekshiramiz: oxirgi
@@ -56,6 +58,10 @@ async def run(bot: Bot) -> None:
             if now.hour >= BACKUP_HOUR and last_backup_day != today:
                 last_backup_day = today
                 await _daily_backup(bot, today)
+
+            if now.hour >= REPORT_HOUR and last_report_day != today:
+                last_report_day = today
+                await _daily_report(bot, now)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -101,6 +107,20 @@ async def _tick(bot: Bot) -> None:
                 "Eslatma: kechqurun=%s, tez orada=%s · davomat so'rovi=%s",
                 evening, soon, asked,
             )
+
+
+async def _daily_report(bot: Bot, now) -> None:  # noqa: ANN001
+    """Kunlik hisobot — kechqurun xodimlarga.
+
+    Soat 21:00 da yuboriladi: shu paytda ertangi e'lonlar to'lgan-to'lmagani
+    aniq bo'ladi va bo'sh joylarni to'ldirishga hali vaqt bor.
+    """
+    since = (now - timedelta(days=1)).astimezone(timezone.utc)
+    async with SessionMaker() as session:
+        summary = await svc.daily_summary(session, since)
+        text = texts.daily_report(summary, now.strftime("%d.%m.%Y"))
+        await publisher.notify_staff(bot, session, text)
+    log.info("Kunlik hisobot yuborildi")
 
 
 async def _daily_backup(bot: Bot, day: str) -> None:

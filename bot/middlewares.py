@@ -15,10 +15,11 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 from aiogram.types import User as TgUser
 
+from bot import texts
 from bot.db.base import SessionMaker
+from bot.i18n import set_lang
 from bot.permissions import is_staff
 from bot.services.jobs import get_or_create_user
-from bot.texts import BLOCKED, TOO_FAST
 
 
 class ThrottleMiddleware(BaseMiddleware):
@@ -58,9 +59,9 @@ class ThrottleMiddleware(BaseMiddleware):
             self._seen[tg_user.id] = (now, True)
             if not warned:
                 if isinstance(event, CallbackQuery):
-                    await event.answer(TOO_FAST)
+                    await event.answer(texts.TOO_FAST)
                 elif isinstance(event, Message):
-                    await event.answer(TOO_FAST)
+                    await event.answer(texts.TOO_FAST)
             return None
 
         self._seen[tg_user.id] = (now, False)
@@ -139,11 +140,15 @@ class UserMiddleware(BaseMiddleware):
         user = await get_or_create_user(data["session"], tg_user)
         data["user"] = user
 
+        # Shu xabar davomida barcha matnlar foydalanuvchining tilida
+        # bo'lishi uchun. bot/texts.py shu qiymatga qarab tanlaydi.
+        set_lang(user.lang)
+
         if user.is_blocked:
             if isinstance(event, Message):
-                await event.answer(BLOCKED)
+                await event.answer(texts.BLOCKED)
             elif isinstance(event, CallbackQuery):
-                await event.answer(BLOCKED, show_alert=True)
+                await event.answer(texts.BLOCKED, show_alert=True)
             return None
 
         return await handler(event, data)

@@ -23,6 +23,7 @@ from bot.callbacks import (
     EditCB,
     FeedCB,
     JobCB,
+    JobEditCB,
     JobModCB,
     ModCB,
     NavCB,
@@ -42,17 +43,46 @@ from bot.config import (
 )
 from bot.db.models import Channel, Job, JobStatus, Role, User
 from bot.permissions import is_admin, is_staff
-from bot.texts import job_row, money, short_date
+from bot import texts
+from bot.i18n import LANGS, is_ru
 from bot.utils import local_today
 
 # ---------------------------------------------------------------- reply
 
-BTN_FIND = "🔎 Ish qidirish"
-BTN_MY = "📋 Mening ishlarim"
-BTN_PROFILE = "👤 Profil"
-BTN_POST = "➕ E'lon berish"
-BTN_MY_ADS = "📢 E'lonlarim"
-BTN_ADMIN = "🛠 Admin"
+# Ishchi/ish beruvchi ko'radigan tugmalar ikki tilda.
+#
+# Muhim nozik joy: handler'lar tugma MATNI bo'yicha filtrlaydi. Shuning
+# uchun har tugmaning ikkala varianti ham kerak — odam tilni almashtirsa,
+# ekranida eski klaviatura qolgan bo'lsa ham tugma ishlashda davom etadi.
+_LABELS: dict[str, tuple[str, str]] = {
+    "find": ("🔎 Ish qidirish", "🔎 Поиск работы"),
+    "my": ("📋 Mening ishlarim", "📋 Мои работы"),
+    "profile": ("👤 Profil", "👤 Профиль"),
+    "post": ("➕ E'lon berish", "➕ Разместить работу"),
+    "myads": ("📢 E'lonlarim", "📢 Мои объявления"),
+    "admin": ("🛠 Admin", "🛠 Админ"),
+    "back": ("⬅️ Orqaga", "⬅️ Назад"),
+}
+
+
+def label(key: str) -> str:
+    """Joriy tildagi tugma matni."""
+    uz_text, ru_text = _LABELS[key]
+    return ru_text if is_ru() else uz_text
+
+
+def variants(key: str) -> set[str]:
+    """Filtr uchun: tugmaning BARCHA tillardagi variantlari."""
+    return set(_LABELS[key])
+
+
+# Eski nomlar (o'zbekcha) — admin paneli va kod ichidagi havolalar uchun.
+BTN_FIND = _LABELS["find"][0]
+BTN_MY = _LABELS["my"][0]
+BTN_PROFILE = _LABELS["profile"][0]
+BTN_POST = _LABELS["post"][0]
+BTN_MY_ADS = _LABELS["myads"][0]
+BTN_ADMIN = _LABELS["admin"][0]
 
 BTN_NEW_JOB = "➕ Yangi e'lon"
 BTN_PAYMENTS = "💳 To'lovlar"
@@ -63,30 +93,39 @@ BTN_SETTINGS = "⚙️ Sozlamalar"
 BTN_USERS = "👥 Foydalanuvchilar"
 BTN_ADS = "📣 Reklama"
 BTN_REPORTS = "🆘 Murojaatlar"
-BTN_BACK = "⬅️ Orqaga"
+BTN_BACK = _LABELS["back"][0]
 
 
 def phone_kb() -> ReplyKeyboardMarkup:
+    text = "📱 Отправить номер" if is_ru() else "📱 Raqamni yuborish"
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Raqamni yuborish", request_contact=True)]],
+        keyboard=[[KeyboardButton(text=text, request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
 
 
+def lang_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for code, name in LANGS.items():
+        kb.button(text=name, callback_data=PickCB(field="lang", value=code).pack())
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def main_menu(user: User) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     if user.role == Role.EMPLOYER:
-        kb.button(text=BTN_POST)
-        kb.button(text=BTN_MY_ADS)
-        kb.button(text=BTN_PROFILE)
+        kb.button(text=label("post"))
+        kb.button(text=label("myads"))
+        kb.button(text=label("profile"))
         kb.adjust(2, 1)
     else:
-        kb.button(text=BTN_FIND)
-        kb.button(text=BTN_MY)
-        kb.button(text=BTN_PROFILE)
+        kb.button(text=label("find"))
+        kb.button(text=label("my"))
+        kb.button(text=label("profile"))
         if is_staff(user):
-            kb.button(text=BTN_ADMIN)
+            kb.button(text=label("admin"))
             kb.adjust(2, 2)
         else:
             kb.adjust(2, 1)
@@ -185,7 +224,7 @@ def feed_kb(
     kb = InlineKeyboardBuilder()
     for job, taken in rows:
         kb.button(
-            text=job_row(job, taken),
+            text=texts.job_row(job, taken),
             callback_data=JobCB(action="view", job_id=job.id).pack(),
         )
     kb.adjust(1)
@@ -242,7 +281,7 @@ def days_kb() -> InlineKeyboardMarkup:
     today = local_today()
     for i in range(7):
         d = today + timedelta(days=i)
-        kb.button(text=short_date(d), callback_data=PickCB(field="fday", value=d.isoformat()).pack())
+        kb.button(text=texts.short_date(d), callback_data=PickCB(field="fday", value=d.isoformat()).pack())
     kb.adjust(1, 2)
     return kb.as_markup()
 
@@ -272,7 +311,7 @@ def job_view_kb(
             callback_data=JobCB(action="cancel", job_id=job.id).pack(),
         )
     elif job.status == JobStatus.OPEN and free > 0:
-        label = "🆓 Bepul yozilish" if job.fee <= 0 else f"✅ Yozilish · {money(job.fee)}"
+        label = "🆓 Bepul yozilish" if job.fee <= 0 else f"✅ Yozilish · {texts.money(job.fee)}"
         kb.button(text=label, callback_data=JobCB(action="apply", job_id=job.id).pack())
         # Bonus bor va e'lon pulli — tanlov beramiz, avtomat sarflamaymiz.
         # Odam bonusini qaysi ishga ishlatishni o'zi hal qilsin.
@@ -357,7 +396,7 @@ def times_kb() -> InlineKeyboardMarkup:
 def salaries_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for s in QUICK_SALARIES:
-        kb.button(text=money(s), callback_data=PickCB(field="salary", value=str(s)).pack())
+        kb.button(text=texts.money(s), callback_data=PickCB(field="salary", value=str(s)).pack())
     kb.adjust(2)
     return kb.as_markup()
 
@@ -373,7 +412,7 @@ def slots_kb() -> InlineKeyboardMarkup:
 def fee_kb(default_fee: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for v in {default_fee, 5000, 10000, 15000, 20000}:
-        kb.button(text=money(v), callback_data=PickCB(field="fee", value=str(v)).pack())
+        kb.button(text=texts.money(v), callback_data=PickCB(field="fee", value=str(v)).pack())
     kb.button(text="🆓 Bepul", callback_data=PickCB(field="fee", value="0").pack())
     kb.adjust(2)
     return kb.as_markup()
@@ -384,7 +423,7 @@ def dates_kb(field: str = "date") -> InlineKeyboardMarkup:
     today = local_today()
     for i in range(8):
         d = today + timedelta(days=i)
-        kb.button(text=short_date(d), callback_data=PickCB(field=field, value=d.isoformat()).pack())
+        kb.button(text=texts.short_date(d), callback_data=PickCB(field=field, value=d.isoformat()).pack())
     kb.adjust(2)
     return kb.as_markup()
 
@@ -450,6 +489,13 @@ def admin_job_kb(job: Job, *, owner_view: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="👥 Yozilganlar", callback_data=AdminJobCB(action="workers", job_id=job.id).pack())
     kb.button(text="♻️ Takrorlash", callback_data=AdminJobCB(action="clone", job_id=job.id).pack())
+    if job.status in (JobStatus.OPEN, JobStatus.FULL, JobStatus.PENDING_REVIEW):
+        kb.button(text="✏️ Tahrirlash", callback_data=AdminJobCB(action="edit", job_id=job.id).pack())
+        # Bekor qilish — yopishdan farqli: yozilganlarga XABAR beriladi.
+        kb.button(
+            text="❌ Ishni bekor qilish",
+            callback_data=AdminJobCB(action="cancel", job_id=job.id).pack(),
+        )
     if not owner_view:
         kb.button(
             text="💳 Pulli qilish" if job.fee <= 0 else "🆓 Bepul qilish",
@@ -463,7 +509,23 @@ def admin_job_kb(job: Job, *, owner_view: bool = False) -> InlineKeyboardMarkup:
             text="📢 Kanallarga joylash",
             callback_data=AdminJobCB(action="repost", job_id=job.id).pack(),
         )
-    kb.adjust(2, 2, 2)
+    kb.adjust(2, 2, 2, 2)
+    return kb.as_markup()
+
+
+def edit_job_kb(job_id: int) -> InlineKeyboardMarkup:
+    """Joylangan e'lonning qaysi maydonini tahrirlash."""
+    kb = InlineKeyboardBuilder()
+    for field, label in EDIT_FIELDS:
+        if field == "fee":
+            continue  # narx alohida tugma orqali o'zgaradi
+        kb.button(text=label, callback_data=JobEditCB(field=field, job_id=job_id).pack())
+    kb.adjust(3)
+    kb.row(
+        InlineKeyboardButton(
+            text="⬅️ Orqaga", callback_data=AdminJobCB(action="view", job_id=job_id).pack()
+        )
+    )
     return kb.as_markup()
 
 
@@ -479,7 +541,7 @@ def jobs_list_kb(jobs: list[Job]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for j in jobs:
         kb.button(
-            text=f"{icon[j.status]} #{j.id} {j.title} · {short_date(j.work_date)}",
+            text=f"{icon[j.status]} #{j.id} {j.title} · {texts.short_date(j.work_date)}",
             callback_data=AdminJobCB(action="view", job_id=j.id).pack(),
         )
     kb.adjust(1)

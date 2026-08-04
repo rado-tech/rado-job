@@ -90,6 +90,45 @@ reklamasida, bayramda).
 
 ---
 
+## 🌐 Ikki til
+
+Ishchi birinchi `/start` da tilni tanlaydi: 🇺🇿 O'zbekcha yoki 🇷🇺 Русский.
+Keyin istalgan payt `/til` orqali o'zgartiradi.
+
+**Ruschaga ishchi ko'radigan hamma narsa tarjima qilingan:** ro'yxatdan
+o'tish, e'lon kartasi, to'lov ko'rsatmasi, eslatmalar, navbat, referal,
+shikoyat, tugmalar. **Admin paneli o'zbekcha qoladi** — uni siz va
+moderatorlar ishlatasiz.
+
+Texnik jihati: `bot/texts.py` — oddiy modul emas, **proksi**. Undan nima
+so'ralsa, joriy foydalanuvchi tiliga mos lug'atdan qaytaradi
+(`bot/locales/uz.py`, `bot/locales/ru.py`). Shu tufayli handler'lardagi
+`texts.job_card(...)` chaqiruvlarining birortasini o'zgartirish kerak
+bo'lmadi.
+
+> ⚠️ Kodda `from bot.texts import money` deb **yozmang** — bu tarjimani
+> import paytida qotirib qo'yadi. `from bot import texts` va
+> `texts.money(...)` deb yozing. `wiring_test.py` buni avtomat tekshiradi.
+
+Yangi til qo'shish: `bot/locales/` ga fayl qo'shib, `bot/i18n.py` dagi
+`LANGS` ga kalit yozasiz. Tarjimasi yo'q matn avtomat o'zbekchaga qaytadi.
+
+---
+
+## 📊 Kunlik hisobot
+
+Har kuni soat **21:00** da xodimlarga keladi. Hoziroq ko'rish: `/hisobot`.
+
+Ichida: yangi foydalanuvchi va e'lonlar, tasdiqlangan/rad etilgan
+yozilishlar, **chiqish darajasi** (%), tushum, tekshirilmagan cheklar —
+va eng qimmatlisi: **ertangi to'lmagan joylar ro'yxati**.
+
+Soat 21:00 ataylab tanlangan: ertangi e'lonlar to'lgan-to'lmagani shu
+paytda aniq bo'ladi va bo'sh joylarni to'ldirishga (reklama tarqatish,
+bepul qilish) hali vaqt bor.
+
+---
+
 ## Eslatma va davomat
 
 Bot ishchini **uch marta** eslatadi va o'zi so'raydi:
@@ -340,6 +379,7 @@ bazani **o'chirmaydi** — nomini o'zgartirib chetga oladi.
 | `/kasb` | Qiziqishlar — faqat shu turdagi e'lonlar haqida xabar keladi |
 | `/dost` | Do'st chaqirib **bepul yozilish bonusi** olish |
 | `/shikoyat` | Muammo yoki savol — adminga boradi |
+| `/til` | 🇺🇿 O'zbekcha / 🇷🇺 Русский |
 | `/xabar` | Xabarnomani yoqish/o'chirish |
 
 ### Ish beruvchi

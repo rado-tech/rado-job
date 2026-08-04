@@ -18,8 +18,7 @@ from bot.callbacks import AttendCB, FeedCB, JobCB, NavCB, PickCB
 from bot.config import CATEGORY_NAMES
 from bot.db.models import UNLOCKED, Booking, BookingStatus, JobStatus, User, utcnow
 from bot.keyboards import (
-    BTN_FIND,
-    BTN_MY,
+    variants,
     cancel_confirm_kb,
     categories_kb,
     days_kb,
@@ -127,7 +126,7 @@ def _day_label(iso: str) -> str:
     return texts.short_date(date.fromisoformat(iso)) if iso else ""
 
 
-@router.message(F.text == BTN_FIND)
+@router.message(F.text.in_(variants("find")))
 @router.message(Command("ishlar"))
 async def feed_cmd(message: Message, state: FSMContext, session: AsyncSession, user: User) -> None:
     await state.set_state(None)
@@ -268,6 +267,13 @@ async def job_apply(
             await call.message.answer(texts.credit_used(user.free_credits))
         await notifier.send_secret(bot, user.id, job)
         await notifier.reward_referrer_if_first(bot, session, user.id)
+        full = await session.scalar(
+            select(Booking)
+            .options(selectinload(Booking.job), selectinload(Booking.user))
+            .where(Booking.id == booking.id)
+        )
+        if full:
+            await notifier.notify_author_new_worker(bot, session, full)
         await call.answer("🎉 Yozildingiz!")
     else:
         # PULLI e'lon — chek kutish holatiga o'tamiz va ariza ID sini eslab
@@ -447,6 +453,9 @@ async def got_receipt(
     booking = await session.get(Booking, booking_id) if booking_id else None
 
     if booking is None or booking.user_id != user.id:
+        # Holat yo'qolgan bo'lsa ham chekni yo'qotmaymiz — bazadan topamiz.
+        booking = await svc.pending_payment_booking(session, user.id)
+    if booking is None:
         await state.set_state(None)
         await message.answer("❗️ Ariza topilmadi. Qaytadan yozilishga urinib ko'ring.")
         return
@@ -498,9 +507,45 @@ async def receipt_wrong(message: Message) -> None:
     )
 
 
+# ---------------------------------------------------------------- adashgan chek
+
+@router.message(F.photo)
+async def stray_receipt(
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    """Holatdan tashqari kelgan rasm.
+
+    Bot qayta ishga tushganda FSM holati xotiradan yo'qoladi (Railway'da
+    restart tez-tez bo'ladi). Ilgari bunday rasm HECH QAYERGA tushmasdi:
+    odam pulni o'tkazgan, chekni yuborgan — bot esa jim. Endi bazadan
+    to'lov kutayotgan arizasini topib, chekni o'shanga bog'laymiz.
+    """
+    booking = await svc.pending_payment_booking(session, user.id)
+    if booking is None:
+        await message.answer(
+            "🖼 Rasmni oldim, lekin sizda to'lov kutayotgan ariza yo'q.\n\n"
+            "Agar pul o'tkazgan bo'lsangiz — /shikoyat orqali yozing, "
+            "administrator tekshiradi."
+        )
+        return
+
+    await svc.attach_receipt(session, booking, message.photo[-1].file_id)
+    await state.set_state(None)
+    await message.answer(
+        f"✅ Chek <b>«{booking.job.title}»</b> ishiga qabul qilindi.\n\n"
+        + texts.RECEIPT_RECEIVED
+    )
+    if not await publisher.send_to_moderation(bot, session, booking):
+        log.error("Chek hech kimga yetib bormadi! booking=%s", booking.id)
+        await message.answer(
+            "⚠️ Texnik nosozlik: chek administratorga yetmadi. "
+            "Iltimos, /shikoyat orqali yozing."
+        )
+
+
 # ================================================================ mening ishlarim
 
-@router.message(F.text == BTN_MY)
+@router.message(F.text.in_(variants("my")))
 @router.message(Command("mening"))
 async def my_jobs(message: Message, state: FSMContext, session: AsyncSession, user: User) -> None:
     await state.set_state(None)

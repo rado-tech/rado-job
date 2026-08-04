@@ -13,9 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot import texts
 from bot.callbacks import AdminJobCB, ReportCB, WorkerCB
 from bot.config import settings as env
-from bot.db.models import BookingStatus, JobStatus, Role, User
+from bot.db.models import UNLOCKED, BookingStatus, JobStatus, Role, User
 from bot.keyboards import (
-    BTN_ADMIN,
+    variants,
     BTN_ALL_ADS,
     BTN_MY_ADS,
     BTN_PAYMENTS,
@@ -35,7 +35,6 @@ from bot.services import jobs as svc
 from bot.services import publisher, reports
 from bot.services import settings_store as store
 from bot.states import ReportFlow, Search
-from bot.texts import money
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -48,7 +47,7 @@ router.message.filter(IsStaff())
 router.callback_query.filter(IsStaff())
 
 
-@router.message(F.text == BTN_ADMIN)
+@router.message(F.text.in_(variants("admin")))
 @router.message(Command("admin"))
 async def admin_panel(message: Message, state: FSMContext, user: User) -> None:
     await state.clear()
@@ -100,8 +99,10 @@ async def job_workers(call: CallbackQuery, callback_data: AdminJobCB, session: A
             f"📱 <code>{b.user.phone or '—'}</code>\n"
             f"📊 {b.user.reliability}"
         )
-        # Belgilash tugmalari faqat to'lovi tasdiqlanganlar uchun mantiqiy.
-        kb = worker_actions_kb(b.id) if b.status == BookingStatus.CONFIRMED else None
+        # Tugmalar tafsilotlarni olgan hamma uchun ko'rinadi — shu jumladan
+        # allaqachon belgilanganlar uchun ham, chunki xato bosilgan qarorni
+        # tuzatish imkoni bo'lishi kerak.
+        kb = worker_actions_kb(b.id) if b.status in UNLOCKED else None
         await call.message.answer(text, reply_markup=kb)
 
 
@@ -152,7 +153,7 @@ async def job_toggle_fee(
 
     new_fee = store.default_fee() if job.fee <= 0 else 0
     await svc.set_fee(session, job, new_fee)
-    await call.answer("🆓 Bepul bo'ldi" if new_fee == 0 else f"💳 {money(new_fee)}")
+    await call.answer("🆓 Bepul bo'ldi" if new_fee == 0 else f"💳 {texts.money(new_fee)}")
 
     # Kanallardagi postda ham darhol ko'rinsin.
     await publisher.sync_job_post(bot, session, job)
@@ -310,8 +311,23 @@ async def stats(message: Message, state: FSMContext, session: AsyncSession) -> N
         f"🔎 Tekshiruvda: {s['waiting']} · ⏳ navbatda: {s['waitlist']}\n"
         f"🎁 Bonus bilan: {s['credits_used']}\n"
         f"🆘 Ochiq murojaat: <b>{open_reports}</b>\n\n"
-        f"💰 Yig'ilgan to'lov: <b>{money(s['revenue'])}</b>"
+        f"💰 Yig'ilgan to'lov: <b>{texts.money(s['revenue'])}</b>\n\n"
+        f"<i>Kunlik hisobot har kuni soat 21:00 da keladi. Hoziroq ko'rish "
+        f"uchun /hisobot</i>"
     )
+
+
+@router.message(Command("hisobot"), IsAdmin())
+async def daily_report_now(message: Message, session: AsyncSession) -> None:
+    """Kunlik hisobotni kutmasdan ko'rish."""
+    from datetime import datetime, timedelta, timezone
+
+    from bot.config import TZ
+
+    now = datetime.now(TZ)
+    since = (now - timedelta(days=1)).astimezone(timezone.utc)
+    summary = await svc.daily_summary(session, since)
+    await message.answer(texts.daily_report(summary, now.strftime("%d.%m.%Y")))
 
 
 # ================================================================ foydalanuvchilar

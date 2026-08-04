@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,7 +31,7 @@ from bot.db.models import (
     utcnow,
 )
 from bot.services import settings_store as store
-from bot.utils import local_today
+from bot.utils import local_now_hhmm, local_today
 
 # Bir vaqtda ikki kishi oxirgi bitta joyga bosishi mumkin. Ikkalasi ham
 # "bo'sh joy bor" deb ko'rib, ikkalasiga ham joy berilishi mumkin edi —
@@ -42,6 +42,24 @@ _job_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 class ApplyError(Exception):
     """Yozilish rad etildi — sababi foydalanuvchiga ko'rsatiladi."""
+
+
+def not_started():  # noqa: ANN201
+    """SQL sharti: ish hali BOSHLANMAGAN.
+
+    Ilgari faqat sana tekshirilardi (`work_date >= bugun`). Natijada
+    bugun soat 08:00 dagi ish kechqurun 18:00 da ham ro'yxatda turardi va
+    odam allaqachon o'tib ketgan ishga pul to'lay olardi.
+
+    Endi bugungi kun uchun vaqt ham hisobga olinadi. start_time doim
+    "HH:MM" ko'rinishida nol bilan to'ldirilgani uchun matn taqqoslash
+    to'g'ri ishlaydi.
+    """
+    today = local_today()
+    return or_(
+        Job.work_date > today,
+        and_(Job.work_date == today, Job.start_time > local_now_hhmm()),
+    )
 
 
 # ================================================================ users
@@ -174,7 +192,7 @@ async def feed(
 ) -> tuple[list[Job], int]:
     """Ishchi ko'radigan e'lonlar ro'yxati + umumiy soni (sahifalash uchun)."""
     statuses = [JobStatus.OPEN, JobStatus.FULL] if include_full else [JobStatus.OPEN]
-    conditions = [Job.status.in_(statuses), Job.work_date >= local_today()]
+    conditions = [Job.status.in_(statuses), not_started()]
     if region:
         conditions.append(Job.region == region)
     if category:
@@ -239,8 +257,8 @@ async def apply_to_job(
         job = await _fresh_job(session, job_id)
         if job.status != JobStatus.OPEN:
             raise ApplyError("Bu e'longa yozilish yopilgan.")
-        if job.work_date < local_today():
-            raise ApplyError("Bu ishning sanasi o'tib ketgan.")
+        if job.starts_at <= utcnow():
+            raise ApplyError("Bu ish allaqachon boshlangan.")
 
         existing = await get_booking(session, job_id, user_id)
         if existing and _is_alive(existing):
@@ -315,8 +333,8 @@ async def join_waitlist(session: AsyncSession, job_id: int, user_id: int) -> Boo
         job = await _fresh_job(session, job_id)
         if job.status not in (JobStatus.OPEN, JobStatus.FULL):
             raise ApplyError("Bu e'lon yopilgan.")
-        if job.work_date < local_today():
-            raise ApplyError("Bu ishning sanasi o'tib ketgan.")
+        if job.starts_at <= utcnow():
+            raise ApplyError("Bu ish allaqachon boshlangan.")
 
         existing = await get_booking(session, job_id, user_id)
         if existing and _is_alive(existing):
@@ -650,9 +668,14 @@ async def expire_holds(session: AsyncSession) -> list[Booking]:
 
 
 async def close_past_jobs(session: AsyncSession) -> list[Job]:
+    """Boshlangan ishlarni yopadi.
+
+    Sana emas, aynan BOSHLANISH VAQTI bo'yicha: bugun 08:00 dagi ish
+    soat 08:01 da yopilishi kerak, kechqurun emas.
+    """
     stmt = select(Job).where(
         Job.status.in_([JobStatus.OPEN, JobStatus.FULL, JobStatus.PENDING_REVIEW]),
-        Job.work_date < local_today(),
+        ~not_started(),
     )
     jobs = list((await session.scalars(stmt)).all())
     for j in jobs:
@@ -684,6 +707,31 @@ async def my_bookings(session: AsyncSession, user_id: int, limit: int = 15) -> l
         .limit(limit)
     )
     return list((await session.scalars(stmt)).all())
+
+
+async def pending_payment_booking(session: AsyncSession, user_id: int) -> Booking | None:
+    """Foydalanuvchining to'lov kutayotgan (muddati o'tmagan) arizasi.
+
+    Nima uchun kerak? Bot qayta ishga tushganda FSM holati xotiradan
+    yo'qoladi. Odam pulni o'tkazib, chekni yuboradi — lekin bot uni
+    "chek kutayotgan holat" da emas deb hisoblab, umuman javob bermaydi.
+    Bu esa eng yomon ssenariy: puli ketgan, javob yo'q.
+
+    Shu funksiya orqali chekni holatga tayanmasdan, bazadagi arizaga
+    bog'laymiz.
+    """
+    stmt = (
+        select(Booking)
+        .options(selectinload(Booking.job), selectinload(Booking.user))
+        .where(
+            Booking.user_id == user_id,
+            Booking.status == BookingStatus.PENDING_PAYMENT,
+            or_(Booking.expires_at.is_(None), Booking.expires_at > utcnow()),
+        )
+        .order_by(Booking.created_at.desc())
+        .limit(1)
+    )
+    return await session.scalar(stmt)
 
 
 async def pending_receipts(session: AsyncSession) -> list[Booking]:
@@ -781,6 +829,68 @@ async def stats(session: AsyncSession) -> dict:
     }
 
 
+async def daily_summary(session: AsyncSession, since) -> dict:  # noqa: ANN001
+    """Kunlik hisobot uchun raqamlar.
+
+    `since` — hisobot boshlanish momenti (UTC). Undan keyingi harakatlar
+    sanaladi.
+    """
+
+    async def count(model, *where) -> int:
+        return int((await session.scalar(select(func.count()).select_from(model).where(*where))) or 0)
+
+    revenue = await session.scalar(
+        select(func.coalesce(func.sum(Job.fee), 0))
+        .select_from(Booking)
+        .join(Job, Job.id == Booking.job_id)
+        .where(
+            Booking.decided_at >= since,
+            Booking.status.in_(
+                [BookingStatus.CONFIRMED, BookingStatus.COMPLETED, BookingStatus.NO_SHOW]
+            ),
+            Booking.used_credit.is_(False),
+        )
+    )
+
+    # Ertangi ishlar bo'yicha to'lmagan joylar — eng foydali ma'lumot:
+    # bugun kechqurun nimaga e'tibor berish kerakligini ko'rsatadi.
+    tomorrow = local_today() + timedelta(days=1)
+    open_tomorrow = list(
+        (await session.scalars(
+            select(Job).where(Job.work_date == tomorrow, Job.status == JobStatus.OPEN)
+        )).all()
+    )
+    gaps = []
+    for job in open_tomorrow:
+        taken = await taken_count(session, job.id)
+        if taken < job.slots_total:
+            gaps.append((job, job.slots_total - taken))
+
+    return {
+        "new_users": await count(User, User.created_at >= since),
+        "new_jobs": await count(Job, Job.created_at >= since),
+        "confirmed": await count(
+            Booking, Booking.decided_at >= since,
+            Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.COMPLETED]),
+        ),
+        "rejected": await count(
+            Booking, Booking.decided_at >= since, Booking.status == BookingStatus.REJECTED
+        ),
+        "completed": await count(
+            Booking, Booking.status == BookingStatus.COMPLETED, Booking.decided_at >= since
+        ),
+        "no_show": await count(
+            Booking,
+            Booking.status.in_([BookingStatus.NO_SHOW, BookingStatus.LATE_CANCEL]),
+            Booking.created_at >= since,
+        ),
+        "revenue": int(revenue or 0),
+        "waiting": await count(Booking, Booking.status == BookingStatus.RECEIPT_SENT),
+        "review_jobs": await count(Job, Job.status == JobStatus.PENDING_REVIEW),
+        "gaps": gaps,
+    }
+
+
 async def audience(
     session: AsyncSession,
     *,
@@ -866,6 +976,11 @@ async def _fresh_job(session: AsyncSession, job_id: int) -> Job:
     if job is None:
         raise ApplyError("E'lon topilmadi.")
     return job
+
+
+async def recompute_status(session: AsyncSession, job: Job) -> bool:
+    """Tashqaridan chaqirish uchun (masalan joy soni tahrirlanganda)."""
+    return await _sync_status(session, job)
 
 
 async def _sync_status(session: AsyncSession, job: Job) -> bool:
