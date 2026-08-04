@@ -105,6 +105,68 @@ async def reward_referrer_if_first(bot: Bot, session: AsyncSession, user_id: int
         log.debug("Referal xabari yetmadi (%s): %s", inviter.id, e)
 
 
+async def notify_author_new_worker(bot: Bot, session: AsyncSession, booking) -> None:  # noqa: ANN001
+    """Ish muallifiga: yangi ishchi tasdiqlandi.
+
+    Ilgari ish beruvchi o'zi kirib tekshirishi kerak edi — natijada u
+    nechta odam yig'ilganini bilmasdi va ishonchsizlik paydo bo'lardi.
+    """
+    job = booking.job
+    if job is None or job.created_by == booking.user_id:
+        return
+    taken = await svc.taken_count(session, job.id)
+    try:
+        await bot.send_message(
+            job.created_by,
+            f"👤 <b>Yangi ishchi yozildi</b>\n\n"
+            f"💼 {job.title}\n"
+            f"📅 {texts.fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+            f"<b>{booking.user.full_name}</b>\n"
+            f"📱 <code>{booking.user.phone or '—'}</code>\n"
+            f"📊 {booking.user.reliability}\n\n"
+            f"👥 Jami: <b>{taken}/{job.slots_total}</b>",
+        )
+    except Exception as e:
+        log.debug("Muallifga xabar bormadi (%s): %s", job.created_by, e)
+
+
+async def cancel_job(bot: Bot, session: AsyncSession, job, reason: str | None = None) -> int:
+    """Ishni bekor qiladi va tafsilotlarni olgan HAMMAGA xabar beradi.
+
+    Eng muhim qismi — xabar berish. Yomg'ir yog'di, ish qoldi: agar
+    ishchilarga aytilmasa, ular ertalab manzilga borib, hech kimni
+    topmaydi. Bu bir marta bo'lsa ham ishonchni yo'qotadi.
+    """
+    from bot.db.models import JobStatus
+
+    job.status = JobStatus.CANCELLED
+    await session.commit()
+
+    bookings = await svc.job_workers(session, job.id)
+    text = (
+        f"❌ <b>ISH BEKOR QILINDI</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {texts.fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+    )
+    if reason:
+        text += f"Sabab: <i>{reason}</i>\n\n"
+    text += "❗️ <b>Ishga bormang.</b> Noqulaylik uchun uzr so'raymiz."
+    if job.fee > 0:
+        text += "\n\nTo'lov qilgan bo'lsangiz /shikoyat orqali yozing — qaytariladi."
+
+    sent = 0
+    for b in bookings:
+        try:
+            await bot.send_message(b.user_id, text)
+            sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+
+    await publisher.sync_job_post(bot, session, job)
+    return sent
+
+
 async def send_reminders(bot: Bot, session: AsyncSession, kind: str) -> int:
     """Ish oldidan eslatma. No-show'ni eng ko'p kamaytiradigan narsa."""
     bookings = await svc.bookings_needing_reminder(session, kind)

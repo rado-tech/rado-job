@@ -59,7 +59,7 @@ from bot.middlewares import (  # noqa: E402
     ThrottleMiddleware,
     UserMiddleware,
 )
-from bot.texts import job_card  # noqa: E402
+from bot import texts as texts_mod  # noqa: E402
 from bot.utils import clean, local_today, parse_date, parse_int, parse_time  # noqa: E402
 
 failures = 0
@@ -195,11 +195,63 @@ check("hammasi 64 baytdan kichik", not too_long, str(too_long) if too_long else 
 
 print("\n── Maxfiylik")
 
-check("sir ma'lumot secret=True da chiqadi", "MAXFIY MANZIL" in job_card(job, 2, secret=True))
-check("sir ma'lumot oddiy kartada YO'Q", "MAXFIY MANZIL" not in job_card(job, 2))
-check("kanal postida sir YO'Q", "MAXFIY MANZIL" not in job_card(job, 2, waitlist=3))
-check("bepul e'lon belgilanadi", "BEPUL" in job_card(free_job, 0))
-check("pulli e'londa summa ko'rinadi", "10 000" in job_card(job, 0))
+check("sir ma'lumot secret=True da chiqadi", "MAXFIY MANZIL" in texts_mod.job_card(job, 2, secret=True))
+check("sir ma'lumot oddiy kartada YO'Q", "MAXFIY MANZIL" not in texts_mod.job_card(job, 2))
+check("kanal postida sir YO'Q", "MAXFIY MANZIL" not in texts_mod.job_card(job, 2, waitlist=3))
+check("bepul e'lon belgilanadi", "BEPUL" in texts_mod.job_card(free_job, 0))
+check("pulli e'londa summa ko'rinadi", "10 000" in texts_mod.job_card(job, 0))
+
+
+print("\n── Ko'p tillilik")
+
+from bot.i18n import LANGS, current_lang, set_lang  # noqa: E402
+
+set_lang("uz")
+uz_card = texts_mod.job_card(job, 2)
+uz_money = texts_mod.money(150_000)
+uz_status = texts_mod.BOOKING_STATUS_LABEL[__import__(
+    "bot.db.models", fromlist=["BookingStatus"]).BookingStatus.CONFIRMED]
+
+set_lang("ru")
+ru_card = texts_mod.job_card(job, 2)
+ru_money = texts_mod.money(150_000)
+ru_status = texts_mod.BOOKING_STATUS_LABEL[__import__(
+    "bot.db.models", fromlist=["BookingStatus"]).BookingStatus.CONFIRMED]
+ru_admin = texts_mod.ADMIN_WELCOME  # tarjimasi yo'q -> o'zbekchaga qaytadi
+
+check("tillar ro'yxati", set(LANGS) == {"uz", "ru"})
+check("o'zbekcha karta", "Bo'sh joy" in uz_card and "so'm" in uz_money)
+check("ruscha karta", "Свободных мест" in ru_card and "сум" in ru_money)
+check("ikkalasi farq qiladi", uz_card != ru_card)
+check("holat yorlig'i tarjima qilindi", "Tasdiqlangan" in uz_status and "Подтверждено" in ru_status)
+check("tarjimasi yo'q matn o'zbekchaga qaytdi", "Admin panel" in ru_admin)
+check("maxfiylik ruschada ham saqlanadi",
+      "MAXFIY MANZIL" not in ru_card and "MAXFIY MANZIL" in texts_mod.job_card(job, 2, secret=True))
+
+# Tugma matnlari ikki tilda va filtrlar ikkalasini ham ushlaydi
+set_lang("ru")
+ru_btn = kb.label("find")
+set_lang("uz")
+uz_btn = kb.label("find")
+check("tugma matni tilga qarab o'zgaradi", ru_btn != uz_btn)
+check("filtr ikkala variantni ushlaydi",
+      {uz_btn, ru_btn} == kb.variants("find"))
+
+set_lang("uz")
+
+# Regressiya himoyasi: texts dan to'g'ridan-to'g'ri import qilish tarjimani
+# import paytida "qotirib" qo'yadi — ya'ni ruscha foydalanuvchi o'zbekcha
+# matn ko'radi. Buni odam ko'zi bilan payqash deyarli imkonsiz.
+import pathlib  # noqa: E402
+
+bad = []
+for path in pathlib.Path("bot").rglob("*.py"):
+    if "locales" in path.parts or path.name == "texts.py":
+        continue
+    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip().startswith("from bot.texts import"):
+            bad.append(f"{path}:{i}")
+check("texts dan to'g'ridan-to'g'ri import yo'q", not bad, ", ".join(bad))
 
 
 print("\n── Parserlar")

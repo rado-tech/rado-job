@@ -147,6 +147,8 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(32))
     region: Mapped[str | None] = mapped_column(String(64), index=True)
     role: Mapped[Role] = mapped_column(SAEnum(Role), default=Role.WORKER, index=True)
+    # Interfeys tili: "uz" yoki "ru".
+    lang: Mapped[str] = mapped_column(String(2), default="uz")
 
     # Obuna qilingan kasblar. "|yuk|qurilish|" ko'rinishida saqlanadi —
     # chekkalardagi ajratgichlar tufayli LIKE '%|yuk|%' aniq ishlaydi va

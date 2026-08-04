@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class Reg(StatesGroup):
+    lang = State()
     role = State()
     phone = State()
     region = State()
@@ -34,6 +35,13 @@ class CloneJob(StatesGroup):
     """Eski e'lonni takrorlash — faqat sana so'raladi."""
 
     work_date = State()
+
+
+class EditJob(StatesGroup):
+    """Joylangan e'lonning bitta maydonini tahrirlash."""
+
+    value = State()
+    cancel_reason = State()
 
 
 class Pay(StatesGroup):

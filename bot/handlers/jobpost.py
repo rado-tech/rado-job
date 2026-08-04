@@ -25,11 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot import texts
 from bot.callbacks import AdminJobCB, EditCB, PickCB
 from bot.config import CATEGORY_NAMES, category_name
-from bot.db.models import Job, JobStatus, Role, User
+from bot.db.models import UNLOCKED, Job, JobStatus, Role, User
 from bot.keyboards import (
-    BTN_MY_ADS,
     BTN_NEW_JOB,
-    BTN_POST,
+    variants,
     admin_job_kb,
     categories_kb,
     dates_kb,
@@ -79,7 +78,7 @@ def _can_post(user: User) -> bool:
 
 # ================================================================ boshlash
 
-@router.message(F.text.in_({BTN_NEW_JOB, BTN_POST}))
+@router.message(F.text.in_({BTN_NEW_JOB} | variants("post")))
 @router.message(Command("newjob"))
 async def start_new(message: Message, state: FSMContext, user: User) -> None:
     if not _can_post(user):
@@ -98,7 +97,7 @@ async def start_new(message: Message, state: FSMContext, user: User) -> None:
     await _ask(message, state, "category")
 
 
-@router.message(F.text == BTN_MY_ADS)
+@router.message(F.text.in_(variants("myads")))
 async def my_ads(message: Message, state: FSMContext, session: AsyncSession, user: User) -> None:
     """Ish beruvchining o'z e'lonlari."""
     await state.set_state(None)
@@ -135,12 +134,17 @@ async def owner_job_workers(
         await call.answer("Topilmadi", show_alert=True)
         return
     bookings = await svc.job_workers(session, job.id)
-    confirmed = [b for b in bookings if b.status.value == "CONFIRMED"]
+    # UNLOCKED = tafsilotlarni olgan hamma: tasdiqlangan, ishga chiqqan va
+    # chiqmagan. Ilgari faqat CONFIRMED sanalardi va «ishga chiqdi» deb
+    # belgilangach ishchi ro'yxatdan YO'QOLARDI.
+    confirmed = [b for b in bookings if b.status in UNLOCKED]
     if not confirmed:
         await call.answer("Hali tasdiqlangan ishchi yo'q.", show_alert=True)
         return
     lines = [
-        f"{i}. <b>{b.user.full_name}</b>\n    📱 <code>{b.user.phone}</code> · {b.user.reliability}"
+        f"{i}. {texts.BOOKING_STATUS_LABEL[b.status]}\n"
+        f"    <b>{b.user.full_name}</b> · 📱 <code>{b.user.phone}</code>\n"
+        f"    📊 {b.user.reliability}"
         for i, b in enumerate(confirmed, 1)
     ]
     await call.message.answer(

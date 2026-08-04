@@ -51,7 +51,14 @@ class JobModCB(CallbackData, prefix="jm"):
 
 
 class AdminJobCB(CallbackData, prefix="aj"):
-    action: str  # view | close | reopen | workers | clone | repost
+    action: str  # view | close | reopen | workers | clone | repost | edit | cancel | fee
+    job_id: int
+
+
+class JobEditCB(CallbackData, prefix="je"):
+    """Joylangan e'lonning bitta maydonini tahrirlash."""
+
+    field: str
     job_id: int
 
 

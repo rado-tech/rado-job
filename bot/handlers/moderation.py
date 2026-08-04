@@ -94,6 +94,8 @@ async def approve(
     await publisher.sync_job_post(bot, session, booking.job)
     # Bu odam kimningdir havolasi orqali kelgan bo'lsa — chaqiruvchiga bonus.
     await notifier.reward_referrer_if_first(bot, session, booking.user_id)
+    # Ish beruvchi kim yig'ilayotganini bilib tursin.
+    await notifier.notify_author_new_worker(bot, session, booking)
 
 
 @router.callback_query(ModCB.filter(F.action == "no"))

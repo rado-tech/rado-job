@@ -54,6 +54,7 @@ from bot.db.models import (  # noqa: E402
 from bot.services import backup  # noqa: E402
 from bot.services import channels as ch  # noqa: E402
 from bot.services import jobs as svc  # noqa: E402
+from bot import texts  # noqa: E402
 from bot.services import reports  # noqa: E402
 from bot.services import settings_store as store  # noqa: E402
 from bot.utils import local_today  # noqa: E402
@@ -206,7 +207,8 @@ async def main() -> None:
         section("Bir vaqtda yozilish (race condition)")
         job2 = Job(
             category="qurilish", title="Bitta joy", description="test",
-            secret_details="test", region="Chilonzor", work_date=local_today(),
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=1),
             start_time="09:00", salary=100_000, fee=10_000, slots_total=1,
             created_by=1,
         )
@@ -233,12 +235,73 @@ async def main() -> None:
         check("hudud bo'yicha filtr", only_chilonzor == 2)
         _, only_yuk = await svc.feed(s, category="yuk", include_full=True)
         check("kasb bo'yicha filtr", only_yuk == 1)
+        # Ertaga ikkita ish bor: "Omborga yuk tashish" va "Bitta joy"
         _, tomorrow = await svc.feed(s, day=local_today() + timedelta(days=1), include_full=True)
-        check("sana bo'yicha filtr", tomorrow == 1)
+        check("sana bo'yicha filtr", tomorrow == 2)
+        _, empty_day = await svc.feed(s, day=local_today() + timedelta(days=30), include_full=True)
+        check("bo'sh kun -> 0", empty_day == 0)
         page1, _ = await svc.feed(s, include_full=True, offset=0, limit=1)
         page2, _ = await svc.feed(s, include_full=True, offset=1, limit=1)
         check("sahifalash ishlaydi", len(page1) == 1 and len(page2) == 1
               and page1[0].id != page2[0].id)
+
+        section("Boshlangan ishga yozilib bo'lmaydi")
+        # Bugun ertalab 00:01 da boshlangan ish — hozir albatta o'tib ketgan
+        started = Job(
+            category="yuk", title="Boshlangan ish", description="test",
+            secret_details="test", region="Chilonzor", work_date=local_today(),
+            start_time="00:01", salary=100_000, fee=10_000, slots_total=5,
+            created_by=1,
+        )
+        s.add(started)
+        await s.commit()
+
+        _, total_before = await svc.feed(s, include_full=True)
+        check("boshlangan ish ro'yxatda ko'rinmaydi",
+              all(j.id != started.id for j in (await svc.feed(s, include_full=True))[0]))
+        try:
+            await svc.apply_to_job(s, started.id, w3.id)
+            check("boshlangan ishga yozib bo'lmaydi", False)
+        except svc.ApplyError as e:
+            check("boshlangan ishga yozib bo'lmaydi", "boshlangan" in str(e))
+        try:
+            await svc.join_waitlist(s, started.id, w3.id)
+            check("boshlangan ishga navbatga ham yozib bo'lmaydi", False)
+        except svc.ApplyError:
+            check("boshlangan ishga navbatga ham yozib bo'lmaydi", True)
+
+        closed = await svc.close_past_jobs(s)
+        check("boshlangan ish avtomat yopildi",
+              any(j.id == started.id for j in closed))
+        await s.refresh(started)
+        check("holati CLOSED", started.status == JobStatus.CLOSED)
+
+        # Kelajakdagi ishlar yopilmadi
+        await s.refresh(job)
+        check("kelajakdagi ish yopilmadi", job.status != JobStatus.CLOSED)
+
+        section("Chek holatsiz ham qabul qilinadi (bot restart)")
+        restart_job = Job(
+            category="yuk", title="Restart testi", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=2),
+            start_time="08:00", salary=100_000, fee=10_000, slots_total=3,
+            created_by=1,
+        )
+        s.add(restart_job)
+        await s.commit()
+        rb = await svc.apply_to_job(s, restart_job.id, w2.id)
+        check("to'lov kutilyapti", rb.status == BookingStatus.PENDING_PAYMENT)
+
+        # Bot qayta ishga tushdi -> FSM holati yo'q. Chek bazadan topilishi kerak.
+        found = await svc.pending_payment_booking(s, w2.id)
+        check("holatsiz ariza bazadan topildi", found is not None and found.id == rb.id)
+        check("job bog'lanishi yuklangan", found.job is not None)
+
+        await svc.attach_receipt(s, found, "CHEK_RESTART")
+        check("chek biriktirildi", rb.status == BookingStatus.RECEIPT_SENT)
+        check("chekdan keyin qayta topilmaydi",
+              await svc.pending_payment_booking(s, w2.id) is None)
 
         section("Obuna bo'yicha tarqatish ro'yxati")
         subs = await svc.subscribers_for_job(s, job)
@@ -252,6 +315,7 @@ async def main() -> None:
         check("botni o'chirgan chaqirilmadi", w1.id not in subs)
 
         section("Ish beruvchi e'loni tasdiqdan o'tadi")
+        _, before_emp = await svc.feed(s, include_full=True)
         emp_job = Job(
             category="tozalash", title="Ofis tozalash", description="4 soatlik ish",
             secret_details="Yunusobod 5, Dilnoza opa +998901112233",
@@ -264,13 +328,16 @@ async def main() -> None:
 
         review = await svc.pending_jobs(s)
         check("tasdiq navbatida turibdi", len(review) == 1)
+
+        # Aniq songa emas, FARQqa qaraymiz — testga yangi e'lon qo'shilsa
+        # ham buzilmaydi.
         _, visible = await svc.feed(s, include_full=True)
-        check("tasdiqlanmagan e'lon ro'yxatda ko'rinmaydi", visible == 2)
+        check("tasdiqlanmagan e'lon ro'yxatda ko'rinmaydi", visible == before_emp)
 
         emp_job.status = JobStatus.OPEN
         await s.commit()
         _, visible = await svc.feed(s, include_full=True)
-        check("tasdiqlangach ko'rinadi", visible == 3)
+        check("tasdiqlangach ko'rinadi", visible == before_emp + 1)
 
         section("BEPUL e'lon")
         free_job = Job(
@@ -583,6 +650,23 @@ async def main() -> None:
         check("moderator admin EMAS", not perms.is_admin(mod))
         check("ishchi xodim emas", not perms.is_staff(w1))
         check("ish beruvchi xodim emas", not perms.is_staff(emp))
+
+        section("Kunlik hisobot")
+        since = datetime.now(timezone.utc) - timedelta(days=1)
+        rep = await svc.daily_summary(s, since)
+        check("yangi foydalanuvchilar sanaldi", rep["new_users"] > 0)
+        check("yangi e'lonlar sanaldi", rep["new_jobs"] > 0)
+        check("tasdiqlanganlar sanaldi", rep["confirmed"] > 0)
+        check("tekshiruvdagi cheklar sanaldi", rep["waiting"] >= 0)
+        check("ertangi bo'sh joylar ro'yxati", isinstance(rep["gaps"], list))
+
+        old_since = datetime.now(timezone.utc) + timedelta(days=1)
+        rep_empty = await svc.daily_summary(s, old_since)
+        check("kelajakdagi davr -> 0", rep_empty["new_users"] == 0)
+
+        text = texts.daily_report(rep, "04.08.2026")
+        check("hisobot matni yasaldi", "Kunlik hisobot" in text and len(text) > 100)
+        check("chiqish darajasi ko'rsatildi", "%" in text or "—" in text)
 
         section("Zaxira nusxa")
         path = await backup.create(stamp="test")

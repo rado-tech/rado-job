@@ -23,7 +23,7 @@ from bot.keyboards import channel_post_kb, moderation_kb
 from bot.services import channels as ch
 from bot.services import jobs as svc
 from bot.services import settings_store as store
-from bot.texts import job_card, moderation_caption
+from bot import texts
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def _hash(text: str) -> str:
 async def _render(session: AsyncSession, job: Job) -> tuple[str, bool]:
     taken = await svc.taken_count(session, job.id)
     waiting = await svc.waitlist_count(session, job.id)
-    text = job_card(job, taken, waitlist=waiting)
+    text = texts.job_card(job, taken, waitlist=waiting)
     return text, job.status == JobStatus.OPEN
 
 
@@ -190,7 +190,7 @@ def _explain(e: Exception) -> str:
 async def send_to_moderation(bot: Bot, session: AsyncSession, booking: Booking) -> bool:
     """Chek skrinshotini moderatsiya chatiga tugmalari bilan yuboradi."""
     taken = await svc.taken_count(session, booking.job_id)
-    caption = moderation_caption(booking, taken)
+    caption = texts.moderation_caption(booking, taken)
     kb = moderation_kb(booking.id)
 
     target = store.chat_id("moderation_chat_id")

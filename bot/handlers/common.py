@@ -12,14 +12,15 @@ from bot import texts
 from bot.callbacks import NavCB, PickCB
 from bot.config import CATEGORY_NAMES, settings as env
 from bot.db.models import Role, User
+from bot.i18n import LANGS, set_lang
 from bot.keyboards import (
-    BTN_BACK,
-    BTN_PROFILE,
     categories_multi_kb,
+    lang_kb,
     main_menu,
     phone_kb,
     regions_kb,
     role_kb,
+    variants,
 )
 from bot import runtime
 from bot.permissions import is_staff
@@ -59,8 +60,11 @@ async def cmd_start(
     if not user.is_registered:
         if pending_job:
             await state.update_data(pending_job=pending_job)
-        await state.set_state(Reg.role)
-        await message.answer(texts.CHOOSE_ROLE, reply_markup=role_kb())
+        # Til birinchi so'raladi — undan keyingi hamma savol o'sha tilda.
+        await state.set_state(Reg.lang)
+        await message.answer(
+            "Tilni tanlang / Выберите язык", reply_markup=lang_kb()
+        )
         return
 
     await message.answer(texts.MAIN_MENU, reply_markup=main_menu(user))
@@ -76,6 +80,33 @@ async def cmd_start(
 
 
 # ================================================================ ro'yxatdan o'tish
+
+@router.callback_query(PickCB.filter(F.field == "lang"))
+async def pick_lang(
+    call: CallbackQuery, callback_data: PickCB, state: FSMContext,
+    session: AsyncSession, user: User
+) -> None:
+    user.lang = callback_data.value if callback_data.value in LANGS else "uz"
+    await session.commit()
+    # Shu xabardan boshlab hamma matn yangi tilda bo'lsin.
+    set_lang(user.lang)
+
+    await call.message.edit_text(f"✅ {LANGS[user.lang]}")
+    await call.answer()
+
+    if user.is_registered:
+        await call.message.answer(texts.MAIN_MENU, reply_markup=main_menu(user))
+        return
+
+    await state.set_state(Reg.role)
+    await call.message.answer(texts.CHOOSE_ROLE, reply_markup=role_kb())
+
+
+@router.message(Command("til"))
+@router.message(Command("язык"))
+async def change_lang(message: Message) -> None:
+    await message.answer("Tilni tanlang / Выберите язык", reply_markup=lang_kb())
+
 
 @router.callback_query(Reg.role, PickCB.filter(F.field == "role"))
 async def pick_role(
@@ -174,7 +205,7 @@ async def _finish_registration(
 
 # ================================================================ profil
 
-@router.message(F.text == BTN_PROFILE)
+@router.message(F.text.in_(variants("profile")))
 @router.message(Command("profil"))
 async def profile(message: Message, state: FSMContext, user: User) -> None:
     await state.clear()
@@ -259,7 +290,7 @@ async def change_role(message: Message, state: FSMContext, user: User) -> None:
 
 # ================================================================ navigatsiya
 
-@router.message(F.text == BTN_BACK)
+@router.message(F.text.in_(variants("back")))
 async def back_to_menu(message: Message, state: FSMContext, user: User) -> None:
     await state.clear()
     await message.answer(texts.MAIN_MENU, reply_markup=main_menu(user))
