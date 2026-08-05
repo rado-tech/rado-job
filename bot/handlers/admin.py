@@ -31,7 +31,7 @@ from bot.keyboards import (
     worker_actions_kb,
 )
 from bot.permissions import IsAdmin, IsStaff, is_admin
-from bot.services import jobs as svc
+from bot.services import channels, jobs as svc
 from bot.services import publisher, reports
 from bot.services import settings_store as store
 from bot.states import ReportFlow, Search
@@ -315,6 +315,16 @@ async def stats(message: Message, state: FSMContext, session: AsyncSession) -> N
         f"<i>Kunlik hisobot har kuni soat 21:00 da keladi. Hoziroq ko'rish "
         f"uchun /hisobot</i>"
     )
+
+    # Qaysi kanal odam olib kelyapti — reklamani qayerga sarflash shundan.
+    rows = await svc.channel_attribution(session)
+    if rows:
+        names = {c.id: c.title or str(c.chat_id) for c in await channels.all_channels(session)}
+        lines = []
+        for cid, count in rows[:10]:
+            label = names.get(cid, "bevosita botdan") if cid else "bevosita botdan"
+            lines.append(f"• {label} — <b>{count}</b>")
+        await message.answer("📡 <b>Yozilishlar manbasi</b>\n\n" + "\n".join(lines))
 
 
 @router.message(Command("hisobot"), IsAdmin())

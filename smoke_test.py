@@ -651,6 +651,109 @@ async def main() -> None:
         check("ishchi xodim emas", not perms.is_staff(w1))
         check("ish beruvchi xodim emas", not perms.is_staff(emp))
 
+        section("Takroriy chekni ushlash")
+        dup_job = Job(
+            category="yuk", title="Chek testi", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=4), start_time="08:00",
+            salary=100_000, fee=10_000, slots_total=5, created_by=1,
+        )
+        s.add(dup_job)
+        await s.commit()
+
+        d1 = await svc.apply_to_job(s, paid_job.id, w1.id)
+        await svc.attach_receipt(s, d1, "FILE_A", "UNIQ_AAA")
+        await svc.confirm_booking(s, d1, admin.id)
+
+        d2 = await svc.apply_to_job(s, dup_job.id, w1.id)
+        await svc.attach_receipt(s, d2, "FILE_B", "UNIQ_AAA")  # AYNAN o'sha rasm
+
+        found = await svc.find_duplicate_receipt(s, "UNIQ_AAA", d2.id)
+        check("takroriy chek topildi", found is not None and found.id == d1.id)
+        check("bog'lanishlar yuklangan", found.user is not None and found.job is not None)
+
+        d3 = await svc.apply_to_job(s, dup_job.id, w2.id)
+        await svc.attach_receipt(s, d3, "FILE_C", "UNIQ_BBB")
+        check("boshqa chek — ogohlantirish yo'q",
+              await svc.find_duplicate_receipt(s, "UNIQ_BBB", d3.id) is None)
+        check("belgisiz chek — ogohlantirish yo'q",
+              await svc.find_duplicate_receipt(s, None, d3.id) is None)
+
+        section("Qarorni qaytarish")
+        # Tasdiqlangandan keyin
+        await svc.undo_decision(s, d1)
+        check("tasdiq qaytarildi -> tekshiruvga", d1.status == BookingStatus.RECEIPT_SENT)
+        check("qaror izlari tozalandi", d1.decided_at is None and d1.decided_by is None)
+
+        # Rad etilgandan keyin
+        await svc.reject_booking(s, d3, admin.id, "Xato bosildi")
+        check("rad etildi", d3.status == BookingStatus.REJECTED)
+        await svc.undo_decision(s, d3)
+        check("rad etish qaytarildi", d3.status == BookingStatus.RECEIPT_SENT)
+        check("sabab tozalandi", d3.reject_reason is None)
+
+        # Joy to'lgan bo'lsa tiklab bo'lmaydi
+        tight = Job(
+            category="yuk", title="Bitta joyli", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=4), start_time="08:00",
+            salary=100_000, fee=10_000, slots_total=1, created_by=1,
+        )
+        s.add(tight)
+        await s.commit()
+        t1 = await svc.apply_to_job(s, tight.id, w1.id)
+        await svc.attach_receipt(s, t1, "F1", "U1")
+        await svc.reject_booking(s, t1, admin.id, None)      # joy bo'shadi
+        t2 = await svc.apply_to_job(s, tight.id, w2.id)      # boshqa odam egalladi
+        await svc.attach_receipt(s, t2, "F2", "U2")
+        await svc.confirm_booking(s, t2, admin.id)
+        try:
+            await svc.undo_decision(s, t1)
+            check("to'lgan joyga qaytarib bo'lmaydi", False)
+        except svc.UndoError as e:
+            check("to'lgan joyga qaytarib bo'lmaydi", "to'lgan" in str(e))
+
+        # Boshlangan ishga qaytarib bo'lmaydi
+        try:
+            await svc.undo_decision(s, pb2)
+            check("boshlangan ishda qaytarib bo'lmaydi", False)
+        except svc.UndoError:
+            check("boshlangan ishda qaytarib bo'lmaydi", True)
+
+        section("Kanal atributsiyasi")
+        att_job = Job(
+            category="yuk", title="Manba testi", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=5), start_time="08:00",
+            salary=100_000, fee=0, slots_total=10, created_by=1,
+        )
+        s.add(att_job)
+        await s.commit()
+
+        a1 = await svc.apply_to_job(s, att_job.id, w1.id)
+        a1.source_channel_id = c_chi.id
+        a2 = await svc.apply_to_job(s, att_job.id, w2.id)
+        a2.source_channel_id = c_chi.id
+        a3 = await svc.apply_to_job(s, att_job.id, w3.id)
+        a3.source_channel_id = c_all.id
+        await s.commit()
+
+        rows = await svc.channel_attribution(s)
+        by_channel = {cid: n for cid, n in rows}
+        check("kanal bo'yicha sanaldi", by_channel.get(c_chi.id) == 2)
+        check("ikkinchi kanal sanaldi", by_channel.get(c_all.id) == 1)
+        check("manbasizlar ham sanaldi", by_channel.get(None, 0) > 0)
+        check("ko'p olib kelgani birinchi", rows[0][1] >= rows[-1][1])
+
+        section("Zaxira kanali sozlamasi")
+        check("standart holatda ulanmagan", store.backup_chat() is None)
+        await store.set_value(s, "backup_chat_id", "-1001112223334")
+        await store.set_value(s, "backup_chat_title", "Zaxira arxivi")
+        check("ulangandan keyin o'qildi", store.backup_chat() == -1001112223334)
+        check("nomi saqlandi", store.get("backup_chat_title") == "Zaxira arxivi")
+        await store.set_value(s, "backup_chat_id", "")
+        check("uzilgandan keyin bo'sh", store.backup_chat() is None)
+
         section("Kunlik hisobot")
         since = datetime.now(timezone.utc) - timedelta(days=1)
         rep = await svc.daily_summary(s, since)
@@ -708,10 +811,46 @@ async def main() -> None:
         await s.refresh(w1)
         check("ishga chiqqani belgilandi", w1.completed_count == 1)
 
+        # Tushum hisobi: aniq songa emas, FARQqa qaraymiz — testga yangi
+        # ariza qo'shilganda buzilmaydi.
+        rev_before = (await svc.stats(s))["revenue"]
+
+        # 1) Bepul e'lon — tushum oshmasligi kerak
+        free_rev = Job(
+            category="yuk", title="Bepul (tushum testi)", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=6), start_time="08:00",
+            salary=100_000, fee=0, slots_total=5, created_by=1,
+        )
+        s.add(free_rev)
+        await s.commit()
+        await svc.apply_to_job(s, free_rev.id, w1.id)
+        check("bepul yozilish tushumni oshirmadi",
+              (await svc.stats(s))["revenue"] == rev_before)
+
+        # 2) Bonus bilan — ham oshmasligi kerak
+        paid_rev = Job(
+            category="yuk", title="Pulli (tushum testi)", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=6), start_time="08:00",
+            salary=100_000, fee=25_000, slots_total=5, created_by=1,
+        )
+        s.add(paid_rev)
+        await s.commit()
+        w2.free_credits = 1
+        await s.commit()
+        await svc.apply_to_job(s, paid_rev.id, w2.id, use_credit=True)
+        check("bonus bilan yozilish tushumni oshirmadi",
+              (await svc.stats(s))["revenue"] == rev_before)
+
+        # 3) Haqiqiy to'lov — aynan e'lon narxicha oshishi kerak
+        real = await svc.apply_to_job(s, paid_rev.id, w3.id)
+        await svc.attach_receipt(s, real, "F_REV", "U_REV")
+        await svc.confirm_booking(s, real, admin.id)
+        check("haqiqiy to'lov tushumga qo'shildi",
+              (await svc.stats(s))["revenue"] == rev_before + 25_000)
+
         st = await svc.stats(s)
-        # Bepul yozilishlar tushumni oshirmasligi kerak — faqat pulli
-        # e'lonlarning to'lovi hisoblanadi.
-        check("bepul ishlar tushumga qo'shilmadi", st["revenue"] == 10_000)
         check("tasdiqlanganlar sanaldi", st["confirmed"] >= 2)
         check("ish beruvchilar sanaldi", st["employers"] == 1)
 

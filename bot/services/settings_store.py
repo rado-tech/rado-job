@@ -20,7 +20,14 @@ log = logging.getLogger(__name__)
 # Kalit -> (standart qiymat, tavsif)
 DEFAULTS: dict[str, str] = {
     "channel_id": "",
+    # Moderatsiya chati — FAQAT BITTA. Ikkinchisini ulash uchun avval
+    # birinchisini uzish kerak. Sababi: chek ikki joyga yuborilsa, biri
+    # tasdiqlangach ikkinchi nusxa "hal qilinmagan" bo'lib qolaveradi.
     "moderation_chat_id": "",
+    "moderation_chat_title": "",
+    # Zaxira nusxalar tushadigan kanal. Bo'sh bo'lsa — adminlarga shaxsan.
+    "backup_chat_id": "",
+    "backup_chat_title": "",
     "card_number": "",
     "card_holder": "",
     "default_fee": "10000",
@@ -137,6 +144,10 @@ def channel() -> int | str | None:
 
 def moderation_chat() -> int | str | None:
     return chat_id("moderation_chat_id")
+
+
+def backup_chat() -> int | str | None:
+    return chat_id("backup_chat_id")
 
 
 def card_number() -> str:

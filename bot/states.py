@@ -42,6 +42,7 @@ class EditJob(StatesGroup):
 
     value = State()
     cancel_reason = State()
+    message = State()
 
 
 class Pay(StatesGroup):
@@ -61,6 +62,7 @@ class Setup(StatesGroup):
     fee = State()
     hold = State()
     no_show = State()
+    backup_chat = State()
     add_staff = State()
     channel_regions = State()
     channel_categories = State()

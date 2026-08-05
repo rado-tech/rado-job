@@ -311,6 +311,69 @@ async def _notify_workers(
     return sent
 
 
+# ================================================================ xabar yuborish
+
+@router.callback_query(AdminJobCB.filter(F.action == "msg"))
+async def message_ask(
+    call: CallbackQuery, callback_data: AdminJobCB, state: FSMContext,
+    session: AsyncSession, user: User
+) -> None:
+    """Ishga yozilganlarning hammasiga erkin matn yuborish.
+
+    «Bugun yomg'ir» · «1 soatga kechikdi» · «Boshqa darvozadan kiring» —
+    bularni e'lonni tahrirlash orqali aytib bo'lmaydi.
+    """
+    job = await _load(session, callback_data.job_id, user)
+    if job is None:
+        await call.answer("Topilmadi yoki ruxsat yo'q", show_alert=True)
+        return
+
+    bookings = await svc.job_workers(session, job.id)
+    targets = [b for b in bookings if b.status in UNLOCKED]
+    if not targets:
+        await call.answer("Bu ishga hali hech kim tasdiqlanmagan.", show_alert=True)
+        return
+
+    await state.set_state(EditJob.message)
+    await state.update_data(msg_job_id=job.id)
+    await call.message.answer(
+        f"👥 <b>{len(targets)} ta ishchiga</b> boradi.\n\n" + texts.ASK_JOB_MESSAGE
+    )
+    await call.answer()
+
+
+@router.message(EditJob.message, F.text)
+async def message_send(
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    data = await state.get_data()
+    await state.set_state(None)
+
+    job = await _load(session, data.get("msg_job_id", 0), user)
+    if job is None:
+        await message.answer("E'lon topilmadi.")
+        return
+
+    body = clean(message.text, 1500)
+    if len(body) < 3:
+        await message.answer("❗️ Juda qisqa.")
+        return
+
+    bookings = await svc.job_workers(session, job.id)
+    targets = [b for b in bookings if b.status in UNLOCKED]
+
+    sent = 0
+    for b in targets:
+        try:
+            await bot.send_message(b.user_id, texts.job_message(job, body))
+            sent += 1
+        except Exception as e:
+            log.debug("Xabar yetmadi (%s): %s", b.user_id, e)
+        await asyncio.sleep(0.05)
+
+    await message.answer(f"📨 Yuborildi: <b>{sent}/{len(targets)}</b>")
+
+
 # ================================================================ bekor qilish
 
 @router.callback_query(AdminJobCB.filter(F.action == "cancel"))

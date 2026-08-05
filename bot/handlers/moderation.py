@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 from bot import texts
 from bot.callbacks import JobModCB, ModCB
 from bot.db.models import Booking, BookingStatus, JobStatus, User
+from bot.keyboards import undo_kb
 from bot.permissions import IsStaff
 from bot.services import jobs as svc
 from bot.services import notifier, publisher
@@ -41,19 +42,22 @@ async def _load(session: AsyncSession, booking_id: int) -> Booking | None:
     )
 
 
-async def _mark_done(call: CallbackQuery, suffix: str) -> None:
-    """Chek rasmining tagidagi yozuvni yangilab, tugmalarni olib tashlaydi.
+async def _mark_done(call: CallbackQuery, suffix: str, *, booking_id: int | None = None) -> None:
+    """Chek rasmining tagidagi yozuvni yangilaydi.
 
-    Shunda ikkinchi admin xuddi shu chekni qayta ko'rib chiqmaydi.
+    Tasdiqlash/rad etish tugmalari olib tashlanadi (ikkinchi moderator
+    qayta ko'rib chiqmasligi uchun), o'rniga «↩️ Qaytarish» qo'yiladi —
+    xato bosilgan qarorni tuzatish imkoni bo'lsin.
     """
+    markup = undo_kb(booking_id) if booking_id else None
     try:
         if call.message.caption is not None:
             await call.message.edit_caption(
-                caption=call.message.caption + suffix, reply_markup=None
+                caption=call.message.caption + suffix, reply_markup=markup
             )
         else:
             await call.message.edit_text(
-                (call.message.text or "") + suffix, reply_markup=None
+                (call.message.text or "") + suffix, reply_markup=markup
             )
     except Exception as e:
         log.debug("Xabar yangilanmadi: %s", e)
@@ -89,7 +93,9 @@ async def approve(
             f"bo'lishi mumkin).\n📱 <code>{booking.user.phone}</code>"
         )
 
-    await _mark_done(call, f"\n\n✅ <b>TASDIQLANDI</b> — {user.full_name}")
+    await _mark_done(
+        call, f"\n\n✅ <b>TASDIQLANDI</b> — {user.full_name}", booking_id=booking.id
+    )
     await call.answer("✅ Tasdiqlandi")
     await publisher.sync_job_post(bot, session, booking.job)
     # Bu odam kimningdir havolasi orqali kelgan bo'lsa — chaqiruvchiga bonus.
@@ -162,7 +168,9 @@ async def _do_reject(
     if mod_msg_id := data.get("mod_message_id"):
         try:
             await bot.edit_message_reply_markup(
-                chat_id=message.chat.id, message_id=mod_msg_id, reply_markup=None
+                chat_id=message.chat.id,
+                message_id=mod_msg_id,
+                reply_markup=undo_kb(booking.id),
             )
         except Exception:
             pass
@@ -170,6 +178,58 @@ async def _do_reject(
     await publisher.sync_job_post(bot, session, booking.job)
     # Joy bo'shadi — navbatdagi birinchi odamga taklif ketadi.
     await notifier.promote_and_notify(bot, session, booking.job_id)
+
+
+# ================================================================ qaytarish
+
+@router.callback_query(ModCB.filter(F.action == "undo"))
+async def undo(
+    call: CallbackQuery, callback_data: ModCB, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    """Xato bosilgan qarorni qaytaradi — ariza yana tekshiruvga tushadi."""
+    booking = await _load(session, callback_data.booking_id)
+    if booking is None:
+        await call.answer("Ariza topilmadi.", show_alert=True)
+        return
+
+    was = booking.status
+    try:
+        await svc.undo_decision(session, booking)
+    except svc.UndoError as e:
+        await call.answer(str(e), show_alert=True)
+        return
+
+    await call.answer("↩️ Qaytarildi")
+    await _mark_done_undo(call, user.full_name)
+
+    # Ishchiga ham aytamiz — u allaqachon qarorni ko'rgan.
+    try:
+        if was == BookingStatus.CONFIRMED:
+            note = texts.undo_after_confirm(booking.job)
+        else:
+            note = texts.undo_after_reject(booking.job)
+        await bot.send_message(booking.user_id, note)
+    except Exception as e:
+        log.debug("Qaytarish xabari yetmadi (%s): %s", booking.user_id, e)
+
+    await publisher.sync_job_post(bot, session, booking.job)
+    # Ariza yana navbatda — moderatorlarga qayta ko'rsatamiz.
+    await publisher.send_to_moderation(bot, session, booking)
+
+
+async def _mark_done_undo(call: CallbackQuery, who: str) -> None:
+    suffix = f"\n\n↩️ <b>QAROR QAYTARILDI</b> — {who}"
+    try:
+        if call.message.caption is not None:
+            await call.message.edit_caption(
+                caption=call.message.caption + suffix, reply_markup=None
+            )
+        else:
+            await call.message.edit_text(
+                (call.message.text or "") + suffix, reply_markup=None
+            )
+    except Exception as e:
+        log.debug("Xabar yangilanmadi: %s", e)
 
 
 # ================================================================ e'lon tasdiqlash

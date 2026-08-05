@@ -358,7 +358,9 @@ def report_kb(report_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def channel_post_kb(bot_username: str, job: Job, *, open_: bool) -> InlineKeyboardMarkup:
+def channel_post_kb(
+    bot_username: str, job: Job, *, open_: bool, channel_id: int | None = None
+) -> InlineKeyboardMarkup:
     """Kanaldagi post ostidagi tugma.
 
     Bu URL-tugma, callback emas. Kanal a'zosi bosganda to'g'ridan-to'g'ri bot
@@ -366,14 +368,19 @@ def channel_post_kb(bot_username: str, job: Job, *, open_: bool) -> InlineKeyboa
     kanalda qolib ketardi va biz unga shaxsiy xabar yoza olmasdik — Telegram
     ruxsat bermaydi.
     """
+    # Havolaga kanal belgisi qo'shiladi: job_12_c3. Shu orqali qaysi kanal
+    # odam olib kelganini bilamiz — reklamani qayerga sarflash shundan
+    # ma'lum bo'ladi.
+    payload = f"job_{job.id}" + (f"_c{channel_id}" if channel_id else "")
+
     kb = InlineKeyboardBuilder()
     if open_:
         label = "🆓 Bepul yozilish" if job.fee <= 0 else "✅ Yozilish"
-        kb.button(text=label, url=f"https://t.me/{bot_username}?start=job_{job.id}")
+        kb.button(text=label, url=f"https://t.me/{bot_username}?start={payload}")
     else:
         kb.button(
             text="⏳ Navbatga yozilish",
-            url=f"https://t.me/{bot_username}?start=job_{job.id}",
+            url=f"https://t.me/{bot_username}?start={payload}",
         )
         kb.button(text="🔎 Boshqa ishlar", url=f"https://t.me/{bot_username}?start=feed")
     kb.adjust(1)
@@ -475,6 +482,16 @@ def moderation_kb(booking_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def undo_kb(booking_id: int) -> InlineKeyboardMarkup:
+    """Qaror qabul qilingandan keyin — xatoni tuzatish imkoni."""
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="↩️ Qarorni qaytarish",
+        callback_data=ModCB(action="undo", booking_id=booking_id).pack(),
+    )
+    return kb.as_markup()
+
+
 def job_review_kb(job_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Tasdiqlash", callback_data=JobModCB(action="ok", job_id=job_id).pack())
@@ -489,6 +506,7 @@ def admin_job_kb(job: Job, *, owner_view: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="👥 Yozilganlar", callback_data=AdminJobCB(action="workers", job_id=job.id).pack())
     kb.button(text="♻️ Takrorlash", callback_data=AdminJobCB(action="clone", job_id=job.id).pack())
+    kb.button(text="📨 Xabar yuborish", callback_data=AdminJobCB(action="msg", job_id=job.id).pack())
     if job.status in (JobStatus.OPEN, JobStatus.FULL, JobStatus.PENDING_REVIEW):
         kb.button(text="✏️ Tahrirlash", callback_data=AdminJobCB(action="edit", job_id=job.id).pack())
         # Bekor qilish — yopishdan farqli: yozilganlarga XABAR beriladi.
@@ -566,14 +584,33 @@ def settings_kb(free_mode: bool = False) -> InlineKeyboardMarkup:
     kb.adjust(1)
     kb.button(text="📢 Kanallar", callback_data=SetCB(action="channels").pack())
     kb.button(text="🛡 Moderatorlar", callback_data=SetCB(action="staff").pack())
-    kb.button(text="👮 Moderatsiya chati", callback_data=SetCB(action="moderation").pack())
+    kb.button(text="👮 Moderatsiya guruhi", callback_data=SetCB(action="moderation").pack())
+    kb.button(text="💾 Zaxira kanali", callback_data=SetCB(action="backupchat").pack())
     kb.button(text="💳 Karta raqami", callback_data=SetCB(action="card").pack())
     kb.button(text="👤 Karta egasi", callback_data=SetCB(action="holder").pack())
     kb.button(text="🎫 Standart to'lov", callback_data=SetCB(action="fee").pack())
     kb.button(text="⏳ Bron muddati", callback_data=SetCB(action="hold").pack())
     kb.button(text="🚷 No-show limiti", callback_data=SetCB(action="noshow").pack())
-    kb.button(text="💾 Zaxira nusxa", callback_data=SetCB(action="backup").pack())
-    kb.adjust(1, 2, 1, 2, 2, 1, 1)
+    kb.button(text="💾 Zaxira nusxa olish", callback_data=SetCB(action="backup").pack())
+    kb.adjust(1, 2, 2, 2, 2, 1, 1)
+    return kb.as_markup()
+
+
+def single_chat_kb(kind: str, connected: bool) -> InlineKeyboardMarkup:
+    """Bitta chat uchun kartochka: tekshirish va uzish.
+
+    Moderatsiya guruhi va zaxira kanali — har biri FAQAT BITTA bo'ladi.
+    Yangisini ulash uchun avval eskisini uzish kerak: shunda chek yoki
+    zaxira ikki joyga bo'linib ketmaydi.
+    """
+    kb = InlineKeyboardBuilder()
+    if connected:
+        kb.button(text="🧪 Tekshirish", callback_data=SetCB(action=f"test_{kind}").pack())
+        kb.button(text="🔌 Uzish", callback_data=SetCB(action=f"off_{kind}").pack())
+        kb.adjust(2)
+    else:
+        kb.button(text="🔗 Ulash", callback_data=SetCB(action=f"link_{kind}").pack())
+        kb.adjust(1)
     return kb.as_markup()
 
 
