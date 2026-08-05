@@ -18,9 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from bot import texts
-from bot.callbacks import JobModCB, ModCB
+from bot.callbacks import JobModCB, ModCB, RejCB
 from bot.db.models import Booking, BookingStatus, JobStatus, User
-from bot.keyboards import undo_kb
+from bot.keyboards import REJECT_REASONS, reject_reasons_kb, undo_kb
 from bot.permissions import IsStaff
 from bot.services import jobs as svc
 from bot.services import notifier, publisher
@@ -117,10 +117,38 @@ async def reject_ask(
         await _mark_done(call, "")
         return
 
-    await state.set_state(Moderation.reject_reason)
+    # Avval tayyor sabablarni taklif qilamiz — guruhda matn yozishdan
+    # ko'ra tugma bosish tez va xatosiz.
     await state.update_data(booking_id=booking.id, mod_message_id=call.message.message_id)
-    await call.message.answer(texts.ASK_REJECT_REASON)
+    await call.message.answer(
+        texts.CHOOSE_REJECT_REASON, reply_markup=reject_reasons_kb(booking.id)
+    )
     await call.answer()
+
+
+@router.callback_query(RejCB.filter())
+async def reject_reason_picked(
+    call: CallbackQuery, callback_data: RejCB, state: FSMContext,
+    session: AsyncSession, user: User, bot: Bot
+) -> None:
+    if callback_data.key == "back":
+        await state.set_state(None)
+        await call.message.edit_text("Bekor qilindi.")
+        await call.answer()
+        return
+
+    if callback_data.key == "other":
+        await state.set_state(Moderation.reject_reason)
+        await state.update_data(booking_id=callback_data.booking_id)
+        await call.message.edit_text(texts.ASK_REJECT_REASON)
+        await call.answer()
+        return
+
+    reason = REJECT_REASONS.get(callback_data.key)
+    await state.update_data(booking_id=callback_data.booking_id)
+    await call.message.edit_text(f"❌ Sabab: <i>{reason}</i>")
+    await call.answer()
+    await _do_reject(call.message, state, session, user, bot, reason=reason)
 
 
 # Filtrni DEKORATORGA yozamiz, handler ichida "if state != ..." tekshirmaymiz.

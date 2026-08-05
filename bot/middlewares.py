@@ -95,6 +95,20 @@ class PrivateOnlyMiddleware(BaseMiddleware):
             text = (event.text or "").strip()
             if text.startswith("/id"):
                 return await handler(event, data)
+
+            # Xodim guruhda javob yozayotgan bo'lsa — o'tkazamiz.
+            #
+            # Nega kerak? Moderator chekni «rad etish» bosgach, bot undan
+            # sabab so'raydi. Sabab AYNAN o'sha guruhda yoziladi. Bu qoida
+            # bo'lmasa, yozilgan matn jimgina yo'qolardi va rad etish
+            # umuman ishlamasdi.
+            #
+            # Xavfsiz, chunki ikkita shart birga tekshiriladi:
+            #   * odam xodim (admin yoki moderator)
+            #   * bot AYNAN shu odamdan javob kutib turibdi (FSM holati bor)
+            # Begona odamda holat paydo bo'lmaydi — tugmalar unga ishlamaydi.
+            if data.get("raw_state") is not None and is_staff(data.get("user")):
+                return await handler(event, data)
             return None
 
         if isinstance(event, CallbackQuery):

@@ -43,6 +43,13 @@ class ModCB(CallbackData, prefix="m"):
     booking_id: int
 
 
+class RejCB(CallbackData, prefix="rj"):
+    """Rad etishning tayyor sababi — guruhda matn yozish shart bo'lmasin."""
+
+    key: str  # fake | amount | old | notfound | other | back
+    booking_id: int
+
+
 class JobModCB(CallbackData, prefix="jm"):
     """Ish beruvchi yuborgan e'lonni tasdiqlash/rad etish."""
 

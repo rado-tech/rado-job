@@ -119,7 +119,9 @@ async def _daily_report(bot: Bot, now) -> None:  # noqa: ANN001
     async with SessionMaker() as session:
         summary = await svc.daily_summary(session, since)
         text = texts.daily_report(summary, now.strftime("%d.%m.%Y"))
-        await publisher.notify_staff(bot, session, text)
+        # Faqat adminlarga: hisobotda TUSHUM bor, moderatorlar moliyaviy
+        # ma'lumotni ko'rmasligi kerak (statistika ham shunday cheklangan).
+        await publisher.notify_admins(bot, text)
     log.info("Kunlik hisobot yuborildi")
 
 

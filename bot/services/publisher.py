@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import runtime
 from bot.config import settings as env
-from bot.db.models import Booking, Channel, Job, JobPost, JobStatus
+from bot.db.models import Booking, Channel, Job, JobPost, JobStatus  # noqa: F401
 from bot.keyboards import channel_post_kb, moderation_kb
 from bot.services import channels as ch
 from bot.services import jobs as svc
@@ -199,7 +199,14 @@ def _explain(e: Exception) -> str:
 async def send_to_moderation(bot: Bot, session: AsyncSession, booking: Booking) -> bool:
     """Chek skrinshotini moderatsiya chatiga tugmalari bilan yuboradi."""
     taken = await svc.taken_count(session, booking.job_id)
-    caption = texts.moderation_caption(booking, taken)
+
+    # Ishchi qaysi kanal orqali kelgan — moderator uchun foydali ma'lumot.
+    source = None
+    if booking.source_channel_id:
+        found = await session.get(Channel, booking.source_channel_id)
+        source = found.title if found else None
+
+    caption = texts.moderation_caption(booking, taken, source=source)
 
     # Shu chek boshqa arizada ishlatilganmi? Moderator buni eslab qololmaydi.
     duplicate = await svc.find_duplicate_receipt(
@@ -253,6 +260,30 @@ async def _staff_ids(session: AsyncSession) -> list[int]:
 
 
 async def notify_staff(bot: Bot, session: AsyncSession, text: str, reply_markup=None) -> None:  # noqa: ANN001
+    """Xodimlarga ish bo'yicha xabar.
+
+    Moderatsiya guruhi ulangan bo'lsa — AYNAN o'sha yerga. Shunda hamma
+    ish bir joyda bo'ladi: cheklar ham, tasdiq kutayotgan e'lonlar ham,
+    murojaatlar ham. Ilgari cheklar guruhga, qolgani lichkaga borardi va
+    moderatorlar e'lonlarni umuman ko'rmasdi.
+    """
+    target = store.chat_id("moderation_chat_id")
+    if target is not None:
+        try:
+            await bot.send_message(target, text, reply_markup=reply_markup)
+            return
+        except TelegramMigrateToChat as e:
+            await store.set_value(session, "moderation_chat_id", str(e.migrate_to_chat_id))
+            try:
+                await bot.send_message(
+                    e.migrate_to_chat_id, text, reply_markup=reply_markup
+                )
+                return
+            except Exception as e2:
+                log.warning("Moderatsiya guruhiga yuborilmadi: %s", e2)
+        except Exception as e:
+            log.warning("Moderatsiya guruhiga yuborilmadi: %s", e)
+
     for staff_id in await _staff_ids(session):
         try:
             await bot.send_message(staff_id, text, reply_markup=reply_markup)

@@ -45,7 +45,9 @@ from bot.callbacks import (  # noqa: E402
     JobCB,
     JobModCB,
     ModCB,
+    JobEditCB,
     PickCB,
+    RejCB,
     ReportCB,
     SetCB,
     StaffCB,
@@ -147,6 +149,14 @@ try:
     kb.cancel_confirm_kb(1)
     kb.attendance_kb(1)
     kb.report_kb(1)
+    kb.undo_kb(1)
+    kb.reject_reasons_kb(1)
+    kb.ad_channels_kb([channel], [])
+    kb.ad_channels_kb([channel], [channel.id])
+    kb.single_chat_kb("moderation", True)
+    kb.single_chat_kb("backup", False)
+    kb.edit_job_kb(1)
+    kb.lang_kb()
     kb.channel_post_kb("mybot", job, open_=True)
     kb.channel_post_kb("mybot", job, open_=False)
     kb.moderation_kb(1)
@@ -188,6 +198,8 @@ samples = {
     "StaffCB": StaffCB(action="demote", user_id=9_999_999_999).pack(),
     "SetCB": SetCB(action="testchannel").pack(),
     "PickCB": PickCB(field="njreg", value="Mirzo Ulug'bek").pack(),
+    "RejCB": RejCB(key="notfound", booking_id=999_999).pack(),
+    "JobEditCB": JobEditCB(field="description", job_id=999_999).pack(),
 }
 too_long = {name: len(v.encode()) for name, v in samples.items() if len(v.encode()) > 64}
 check("hammasi 64 baytdan kichik", not too_long, str(too_long) if too_long else "")
@@ -200,6 +212,37 @@ check("sir ma'lumot oddiy kartada YO'Q", "MAXFIY MANZIL" not in texts_mod.job_ca
 check("kanal postida sir YO'Q", "MAXFIY MANZIL" not in texts_mod.job_card(job, 2, waitlist=3))
 check("bepul e'lon belgilanadi", "BEPUL" in texts_mod.job_card(free_job, 0))
 check("pulli e'londa summa ko'rinadi", "10 000" in texts_mod.job_card(job, 0))
+
+
+print("\n── Moderator ko'radigan kartochka")
+
+from datetime import datetime, timezone  # noqa: E402
+
+from bot.db.models import Booking, BookingStatus  # noqa: E402
+
+_b = Booking(
+    id=77, job_id=1, user_id=2, status=BookingStatus.RECEIPT_SENT,
+    created_at=datetime.now(timezone.utc),
+)
+_b.job = job
+_b.user = worker
+worker.phone = "+998901234567"
+
+# Ustun yangi qo'shilgan bazada bu maydonlar NULL bo'lishi mumkin —
+# kartochka shunda ham yiqilmasligi kerak.
+worker.completed_count = None
+worker.no_show_count = None
+
+cap_plain = texts_mod.moderation_caption(_b, 2)
+cap_src = texts_mod.moderation_caption(_b, 2, source="Chilonzor ishlari")
+
+check("e'lon ID si ko'rinadi", "#1" in cap_plain)
+check("ariza ID si ko'rinadi", "#77" in cap_plain)
+check("manba yo'q -> 'bevosita botdan'", "bevosita botdan" in cap_plain)
+check("manba bor -> kanal nomi", "Chilonzor ishlari" in cap_src)
+check("hudud va kasb ko'rinadi", "Chilonzor" in cap_plain and "Yuk tashish" in cap_plain)
+
+check("tayyor sabablar bor", len(kb.REJECT_REASONS) >= 4)
 
 
 print("\n── Ko'p tillilik")
