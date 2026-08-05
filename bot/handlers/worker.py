@@ -260,6 +260,12 @@ async def job_apply(
 
     job = await svc.get_job(session, callback_data.job_id)
 
+    # Qaysi kanal olib kelganini arizaga yozamiz (statistika uchun).
+    data = await state.get_data()
+    if src := data.get("src_channel"):
+        booking.source_channel_id = int(src)
+        await session.commit()
+
     if booking.status == BookingStatus.CONFIRMED:
         # BEPUL yoki BONUS — chek ham, moderatsiya ham kerak emas.
         # Maxfiy ma'lumot va lokatsiya o'sha zahoti beriladi.
@@ -475,7 +481,8 @@ async def got_receipt(
         return
 
     # photo — turli o'lchamdagi ro'yxat, oxirgisi eng sifatlisi.
-    await svc.attach_receipt(session, booking, message.photo[-1].file_id)
+    photo = message.photo[-1]
+    await svc.attach_receipt(session, booking, photo.file_id, photo.file_unique_id)
     await state.set_state(None)
     await message.answer(texts.RECEIPT_RECEIVED)
 
@@ -529,7 +536,8 @@ async def stray_receipt(
         )
         return
 
-    await svc.attach_receipt(session, booking, message.photo[-1].file_id)
+    photo = message.photo[-1]
+    await svc.attach_receipt(session, booking, photo.file_id, photo.file_unique_id)
     await state.set_state(None)
     await message.answer(
         f"✅ Chek <b>«{booking.job.title}»</b> ishiga qabul qilindi.\n\n"

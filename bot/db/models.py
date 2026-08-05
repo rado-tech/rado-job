@@ -279,6 +279,15 @@ class Booking(Base):
     )
 
     receipt_file_id: Mapped[str | None] = mapped_column(String(256))
+    # Telegram har faylga o'zgarmas belgi beradi. file_id har foydalanuvchi
+    # uchun boshqacha, file_unique_id esa BIR XIL — shuning uchun aynan u
+    # bir chekni ikki marta ishlatishni ushlashga yaraydi.
+    receipt_unique_id: Mapped[str | None] = mapped_column(String(64), index=True)
+
+    # Qaysi kanal orqali kelgan (attribution). Reklamani qayerga sarflashni
+    # shu ko'rsatadi.
+    source_channel_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
     expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
 
     # Eslatmalar bir marta yuborilishi uchun belgilar.

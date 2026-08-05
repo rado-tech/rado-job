@@ -39,7 +39,7 @@ class FeedCB(CallbackData, prefix="f"):
 
 
 class ModCB(CallbackData, prefix="m"):
-    action: str  # ok | no
+    action: str  # ok | no | undo
     booking_id: int
 
 

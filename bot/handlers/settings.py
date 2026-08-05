@@ -26,6 +26,7 @@ from bot.db.base import integrity_check
 from bot.db.models import STAFF_ROLES, Channel, JobPost, Role, User
 from bot.keyboards import (
     BTN_SETTINGS,
+    single_chat_kb,
     admin_menu,
     category_options,
     channel_kb,
@@ -52,9 +53,12 @@ async def _view(session: AsyncSession) -> str:
     all_ch = await ch.all_channels(session)
     active = sum(1 for c in all_ch if c.is_active)
     channel_line = f"{len(all_ch)} ta ({active} faol)" if all_ch else "❌ ulanmagan"
+    mod = store.get("moderation_chat_title") or store.get("moderation_chat_id")
+    backup_line = store.get("backup_chat_title") or store.get("backup_chat_id")
     return texts.settings_view(
         channel=channel_line,
-        moderation=store.get("moderation_chat_id") or "— (to'g'ridan-to'g'ri xodimlarga)",
+        moderation=f"🟢 {mod}" if mod else "❌ ulanmagan (cheklar adminlarga)",
+        backup=f"🟢 {backup_line}" if backup_line else "❌ ulanmagan (adminlarga)",
         card=store.card_number(),
         holder=store.card_holder(),
         fee=store.default_fee(),
@@ -100,6 +104,38 @@ async def settings_action(
         await do_backup(call.message, session)
         return
 
+    # --- bitta chat: moderatsiya guruhi va zaxira kanali
+    if action in ("moderation", "backupchat"):
+        await show_single_chat(call.message, "moderation" if action == "moderation" else "backup")
+        await call.answer()
+        return
+
+    if action.startswith("test_"):
+        kind = action.removeprefix("test_")
+        await call.answer("Tekshirilyapti…")
+        await call.message.answer(await _test_single(bot, kind))
+        return
+
+    if action.startswith("off_"):
+        kind = action.removeprefix("off_")
+        await store.set_value(session, f"{_key(kind)}", "")
+        await store.set_value(session, f"{_key(kind)[:-3]}_title", "")
+        await call.answer("🔌 Uzildi")
+        await show_single_chat(call.message, kind)
+        return
+
+    if action.startswith("link_"):
+        kind = action.removeprefix("link_")
+        if store.get(_key(kind)):
+            await call.answer("Avval hozirgisini uzing.", show_alert=True)
+            return
+        await state.set_state(Setup.moderation if kind == "moderation" else Setup.backup_chat)
+        await call.message.answer(
+            texts.CONNECT_MODERATION if kind == "moderation" else texts.CONNECT_BACKUP
+        )
+        await call.answer()
+        return
+
     if action == "freemode":
         turning_on = not store.free_mode()
         if not turning_on and not (store.get("card_number") and store.get("card_holder")):
@@ -117,7 +153,6 @@ async def settings_action(
 
     prompts = {
         "channel": (Setup.channel, texts.CONNECT_CHANNEL),
-        "moderation": (Setup.moderation, texts.CONNECT_MODERATION),
         "card": (Setup.card_number, texts.ASK_CARD_NUMBER),
         "holder": (Setup.card_holder, texts.ASK_CARD_HOLDER),
         "fee": (Setup.fee, texts.ASK_FEE),
@@ -320,19 +355,71 @@ async def add_channel(
     await show_channel(message, session, channel.id)
 
 
-@router.message(Setup.moderation)
-async def set_moderation(message: Message, state: FSMContext, session: AsyncSession) -> None:
+def _key(kind: str) -> str:
+    return "moderation_chat_id" if kind == "moderation" else "backup_chat_id"
+
+
+def _title_key(kind: str) -> str:
+    return "moderation_chat_title" if kind == "moderation" else "backup_chat_title"
+
+
+async def show_single_chat(message: Message, kind: str) -> None:
+    """Ulangan chatni ko'rsatadi — nomi, ID si va tugmalari bilan."""
+    chat_id = store.get(_key(kind))
+    title = store.get(_title_key(kind)) or chat_id
+    await message.answer(
+        texts.single_chat_view(kind, title, chat_id),
+        reply_markup=single_chat_kb(kind, bool(chat_id)),
+    )
+
+
+async def _test_single(bot: Bot, kind: str) -> str:
+    target = store.chat_id(_key(kind))
+    if target is None:
+        return "❌ Ulanmagan."
+    try:
+        info = await bot.get_chat(target)
+        me = await bot.get_chat_member(target, (await bot.get_me()).id)
+    except Exception as e:
+        return f"❌ Ulanib bo'lmadi: {e}"[:300]
+    if me.status in ("left", "kicked"):
+        return f"❌ <b>{info.title}</b> — bot bu chatda yo'q. Uni qayta qo'shing."
+    return f"✅ <b>{info.title}</b> — ishlayapti"
+
+
+async def _connect_single(
+    message: Message, state: FSMContext, session: AsyncSession, kind: str
+) -> None:
+    """Bitta chatni ulaydi. Allaqachon ulangan bo'lsa — rad etadi."""
+    if store.get(_key(kind)):
+        await state.set_state(None)
+        await message.answer(texts.ALREADY_CONNECTED)
+        await show_single_chat(message, kind)
+        return
+
     chat_id, title = _chat_id_from(message)
     if chat_id is None:
         await message.answer(texts.FORWARD_NOT_RECOGNIZED)
         return
-    await store.set_value(session, "moderation_chat_id", str(chat_id))
+
+    await store.set_value(session, _key(kind), str(chat_id))
+    await store.set_value(session, _title_key(kind), title[:128])
     await state.set_state(None)
     await message.answer(
-        f"✅ Moderatsiya chati: <b>{title}</b>\n\nEndi to'lov cheklari shu yerga tushadi.",
+        texts.CONNECTED_MODERATION if kind == "moderation" else texts.CONNECTED_BACKUP,
         reply_markup=admin_menu(),
     )
-    await message.answer(await _view(session), reply_markup=settings_kb(store.free_mode()))
+    await show_single_chat(message, kind)
+
+
+@router.message(Setup.moderation)
+async def set_moderation(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await _connect_single(message, state, session, "moderation")
+
+
+@router.message(Setup.backup_chat)
+async def set_backup_chat(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await _connect_single(message, state, session, "backup")
 
 
 @router.my_chat_member()
@@ -358,8 +445,32 @@ async def bot_added_to_chat(
             await session.commit()
             await publisher.notify_admins(
                 bot,
-                f"🚨 <b>Bot «{title}» dan chiqarib yuborildi!</b>\n\n"
-                f"Kanal to'xtatildi — e'lonlar u yerga joylanmaydi.",
+                texts.CHAT_KICKED_WARNING.format(
+                    title=title,
+                    what="Kanal to'xtatildi — e'lonlar u yerga joylanmaydi.",
+                ),
+            )
+
+        # Moderatsiya guruhi yoki zaxira kanali bo'lsa — bu jimgina
+        # o'tib ketmasligi kerak. Cheklar adminlarga qaytadi, lekin siz
+        # buni bilishingiz shart.
+        if str(event.chat.id) == store.get("moderation_chat_id"):
+            await publisher.notify_admins(
+                bot,
+                texts.CHAT_KICKED_WARNING.format(
+                    title=title,
+                    what="Bu MODERATSIYA guruhi edi. Cheklar endi "
+                         "adminlarga shaxsan boradi.",
+                ),
+            )
+        if str(event.chat.id) == store.get("backup_chat_id"):
+            await publisher.notify_admins(
+                bot,
+                texts.CHAT_KICKED_WARNING.format(
+                    title=title,
+                    what="Bu ZAXIRA kanali edi. Nusxalar endi adminlarga "
+                         "shaxsan boradi.",
+                ),
             )
         return
 
@@ -403,10 +514,16 @@ async def bot_added_to_chat(
         text="📢 E'lonlar kanali (ro'yxatga qo'shish)",
         callback_data=ChatCB(kind="channel", chat_id=event.chat.id).pack(),
     )
-    kb.button(
-        text="👮 Moderatsiya chati",
-        callback_data=ChatCB(kind="moderation", chat_id=event.chat.id).pack(),
-    )
+    if not store.get("moderation_chat_id"):
+        kb.button(
+            text="👮 Moderatsiya guruhi",
+            callback_data=ChatCB(kind="moderation", chat_id=event.chat.id).pack(),
+        )
+    if not store.get("backup_chat_id"):
+        kb.button(
+            text="💾 Zaxira kanali",
+            callback_data=ChatCB(kind="backup", chat_id=event.chat.id).pack(),
+        )
     kb.adjust(1)
     try:
         await bot.send_message(event.from_user.id, "\n".join(lines), reply_markup=kb.as_markup())
@@ -442,12 +559,26 @@ async def use_chat(
         await call.answer("✅ Qo'shildi")
         await call.message.answer(await publisher.test_channel(bot, session, channel))
         await show_channel(call.message, session, channel.id)
-    else:
-        await store.set_value(session, "moderation_chat_id", str(callback_data.chat_id))
-        await call.answer("✅ Saqlandi")
-        await call.message.answer(
-            "✅ Moderatsiya chati o'rnatildi. Endi to'lov cheklari shu yerga tushadi."
-        )
+        return
+
+    kind = callback_data.kind  # moderation | backup
+    if store.get(_key(kind)):
+        await call.answer("Allaqachon ulangan — avval uzing.", show_alert=True)
+        return
+
+    try:
+        info = await bot.get_chat(callback_data.chat_id)
+        title = info.title or str(callback_data.chat_id)
+    except Exception:
+        title = str(callback_data.chat_id)
+
+    await store.set_value(session, _key(kind), str(callback_data.chat_id))
+    await store.set_value(session, _title_key(kind), title[:128])
+    await call.answer("✅ Saqlandi")
+    await call.message.answer(
+        texts.CONNECTED_MODERATION if kind == "moderation" else texts.CONNECTED_BACKUP
+    )
+    await show_single_chat(call.message, kind)
 
 
 # ================================================================ moderatorlar

@@ -61,10 +61,13 @@ async def publish_job(bot: Bot, session: AsyncSession, job: Job) -> tuple[int, l
         return 0, []
 
     text, open_ = await _render(session, job)
-    kb = channel_post_kb(runtime.bot_username, job, open_=open_)
     posted, errors = 0, []
 
     for channel in targets:
+        # Har kanalga o'z belgisi bilan — kim olib kelganini bilish uchun.
+        kb = channel_post_kb(
+            runtime.bot_username, job, open_=open_, channel_id=channel.id
+        )
         try:
             msg = await _send(bot, session, channel, text, kb)
         except Exception as e:
@@ -133,11 +136,17 @@ async def sync_job_post(bot: Bot, session: AsyncSession, job: Job) -> None:
 
     text, open_ = await _render(session, job)
     new_hash = _hash(text)
-    kb = channel_post_kb(runtime.bot_username, job, open_=open_)
+
+    # Post qaysi kanalga tegishli ekanini bilish uchun (tugma havolasi shunga
+    # bog'liq).
+    by_chat = {c.chat_id: c.id for c in await ch.all_channels(session)}
 
     for post in posts:
         if post.last_hash == new_hash:
             continue  # o'zgarish yo'q — so'rov ham yo'q
+        kb = channel_post_kb(
+            runtime.bot_username, job, open_=open_, channel_id=by_chat.get(post.chat_id)
+        )
         try:
             await bot.edit_message_text(
                 chat_id=post.chat_id,
@@ -191,6 +200,14 @@ async def send_to_moderation(bot: Bot, session: AsyncSession, booking: Booking) 
     """Chek skrinshotini moderatsiya chatiga tugmalari bilan yuboradi."""
     taken = await svc.taken_count(session, booking.job_id)
     caption = texts.moderation_caption(booking, taken)
+
+    # Shu chek boshqa arizada ishlatilganmi? Moderator buni eslab qololmaydi.
+    duplicate = await svc.find_duplicate_receipt(
+        session, booking.receipt_unique_id, booking.id
+    )
+    if duplicate is not None:
+        caption += texts.duplicate_warning(duplicate)
+
     kb = moderation_kb(booking.id)
 
     target = store.chat_id("moderation_chat_id")

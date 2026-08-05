@@ -391,3 +391,28 @@ REPORT_SENT = (
 
 def report_answer(text: str) -> str:
     return f"💬 <b>Ответ на ваше обращение:</b>\n\n{text}"
+
+
+def undo_after_confirm(job: Job) -> str:
+    return (
+        f"↩️ Решение по работе <b>«{job.title}»</b> отменено.\n\n"
+        f"Ваша заявка снова на проверке. О результате сообщим.\n\n"
+        f"⚠️ Не выходите на работу до подтверждения."
+    )
+
+
+def undo_after_reject(job: Job) -> str:
+    return (
+        f"↩️ Отклонение по работе <b>«{job.title}»</b> отменено.\n\n"
+        f"Это была ошибка — ваша заявка снова на проверке. О результате "
+        f"сообщим."
+    )
+
+
+def job_message(job: Job, text: str) -> str:
+    return (
+        f"📨 <b>Сообщение по работе</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+        f"{text}"
+    )

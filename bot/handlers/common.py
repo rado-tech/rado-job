@@ -43,10 +43,16 @@ async def cmd_start(
 
     # Kanaldagi tugma https://t.me/bot?start=job_12 ni ochadi. Shu raqamni
     # eslab qolamiz — ro'yxatdan o'tgach aynan o'sha e'lonni ko'rsatamiz.
+    # Kanaldagi tugma: job_12 yoki job_12_c3 (c3 — qaysi kanaldan kelgani).
     payload = (command.args or "").strip()
     pending_job: int | None = None
-    if payload.startswith("job_") and payload[4:].isdigit():
-        pending_job = int(payload[4:])
+    src_channel: int | None = None
+    if payload.startswith("job_"):
+        parts = payload[4:].split("_c")
+        if parts[0].isdigit():
+            pending_job = int(parts[0])
+        if len(parts) > 1 and parts[1].isdigit():
+            src_channel = int(parts[1])
 
     # Referal havolasi: https://t.me/bot?start=ref_123456789
     # Faqat YANGI foydalanuvchi uchun ishlaydi va o'zini o'zi chaqira olmaydi.
@@ -56,6 +62,10 @@ async def cmd_start(
                 "🎁 Do'stingizning havolasi orqali kirdingiz.\n"
                 "<i>Birinchi ishga yozilganingizda unga bonus beriladi.</i>"
             )
+
+    # Kanal belgisini eslab qolamiz — yozilganda arizaga yoziladi.
+    if src_channel:
+        await state.update_data(src_channel=src_channel)
 
     if not user.is_registered:
         if pending_job:
@@ -232,7 +242,9 @@ async def profile(message: Message, state: FSMContext, user: User) -> None:
             f"🎫 Bepul yozilish bonusi: <b>{user.free_credits}</b>\n"
         )
     text += (
+        f"🌐 Til: <b>{LANGS.get(user.lang, LANGS['uz'])}</b>\n"
         f"\nID: <code>{user.id}</code>\n\n"
+        f"/til — tilni o'zgartirish\n"
         f"/dost — do'st chaqirib bonus olish\n"
         f"/hudud — hududni o'zgartirish\n"
         f"/kasb — qiziqishlarni o'zgartirish\n"
@@ -316,6 +328,7 @@ async def cmd_help(message: Message, user: User) -> None:
         "/ishlar — ochiq e'lonlar\n"
         "/mening — mening ishlarim\n"
         "/profil — profil\n"
+        "/til — til / язык\n"
         "/dost — do'st chaqirib bonus olish\n"
         "/kasb — qiziqishlar\n"
         "/xabar — xabarnomani yoqish/o'chirish\n"

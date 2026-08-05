@@ -455,12 +455,79 @@ async def cancel_booking(session: AsyncSession, booking: Booking, *, late: bool 
         await _sync_status(session, job)
 
 
-async def attach_receipt(session: AsyncSession, booking: Booking, file_id: str) -> None:
+async def attach_receipt(
+    session: AsyncSession, booking: Booking, file_id: str, unique_id: str | None = None
+) -> None:
     """Chek keldi — bron muddati olib tashlanadi, admin qarorini kutamiz."""
     booking.receipt_file_id = file_id
+    booking.receipt_unique_id = unique_id
     booking.status = BookingStatus.RECEIPT_SENT
     booking.expires_at = None
     await session.commit()
+
+
+async def find_duplicate_receipt(
+    session: AsyncSession, unique_id: str | None, exclude_id: int
+) -> Booking | None:
+    """Shu chek allaqachon boshqa arizada ishlatilganmi?
+
+    Eng oddiy firibgarlik: bitta to'lov cheki skrinshotini bir necha ishga
+    yuborish. Moderator buni eslab qololmaydi — bot esa eslaydi.
+    """
+    if not unique_id:
+        return None
+    stmt = (
+        select(Booking)
+        .options(selectinload(Booking.job), selectinload(Booking.user))
+        .where(
+            Booking.receipt_unique_id == unique_id,
+            Booking.id != exclude_id,
+            Booking.status.in_(
+                [
+                    BookingStatus.RECEIPT_SENT,
+                    BookingStatus.CONFIRMED,
+                    BookingStatus.COMPLETED,
+                    BookingStatus.NO_SHOW,
+                ]
+            ),
+        )
+        .order_by(Booking.created_at)
+        .limit(1)
+    )
+    return await session.scalar(stmt)
+
+
+class UndoError(Exception):
+    """Qarorni qaytarib bo'lmadi — sabab foydalanuvchiga ko'rsatiladi."""
+
+
+async def undo_decision(session: AsyncSession, booking: Booking) -> None:
+    """Moderator qarorini qaytaradi — ariza yana tekshiruvga tushadi.
+
+    Rad etilganni qaytarishda joy bandligini QAYTA tekshiramiz: o'sha
+    orada boshqa odam joyni egallagan bo'lishi mumkin. Aks holda ortiqcha
+    joy sotib yuborardik.
+    """
+    if booking.status not in (BookingStatus.CONFIRMED, BookingStatus.REJECTED):
+        raise UndoError("Bu qarorni qaytarib bo'lmaydi.")
+
+    job = await session.get(Job, booking.job_id)
+    if job is None:
+        raise UndoError("E'lon topilmadi.")
+    if job.starts_at <= utcnow():
+        raise UndoError("Ish allaqachon boshlangan — qaytarib bo'lmaydi.")
+
+    async with _job_locks[booking.job_id]:
+        if booking.status == BookingStatus.REJECTED:
+            if await taken_count(session, job.id) >= job.slots_total:
+                raise UndoError("Joylar to'lgan — bu arizani tiklab bo'lmaydi.")
+
+        booking.status = BookingStatus.RECEIPT_SENT
+        booking.decided_at = None
+        booking.decided_by = None
+        booking.reject_reason = None
+        await session.commit()
+        await _sync_status(session, job)
 
 
 async def confirm_booking(session: AsyncSession, booking: Booking, admin_id: int) -> None:
@@ -827,6 +894,20 @@ async def stats(session: AsyncSession) -> dict:
         "credits_used": await count(Booking, Booking.used_credit.is_(True)),
         "revenue": int(revenue or 0),
     }
+
+
+async def channel_attribution(session: AsyncSession) -> list[tuple[int | None, int]]:
+    """Qaysi kanal nechta yozilish olib kelgan.
+
+    Reklama byudjetini qayerga sarflashni aynan shu ko'rsatadi.
+    """
+    stmt = (
+        select(Booking.source_channel_id, func.count())
+        .where(Booking.status.in_(OCCUPYING))
+        .group_by(Booking.source_channel_id)
+        .order_by(func.count().desc())
+    )
+    return [(cid, int(n)) for cid, n in (await session.execute(stmt)).all()]
 
 
 async def daily_summary(session: AsyncSession, since) -> dict:  # noqa: ANN001

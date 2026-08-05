@@ -94,12 +94,24 @@ async def create_and_send(
     size_kb = path.stat().st_size / 1024
     text_caption = f"{caption}\n{path.name} · {size_kb:.0f} KB"
     sent = False
-    for admin_id in settings.admins:
+
+    # Alohida zaxira kanali bo'lsa — o'sha yerga. Shunda nusxalar oddiy
+    # xabarlar orasida ko'milib ketmaydi va arxiv sifatida qidiriladi.
+    target = store.backup_chat()
+    if target is not None:
         try:
-            await bot.send_document(admin_id, FSInputFile(path), caption=text_caption)
+            await bot.send_document(target, FSInputFile(path), caption=text_caption)
             sent = True
         except Exception as e:
-            log.warning("Zaxira adminga yuborilmadi (%s): %s", admin_id, e)
+            log.warning("Zaxira kanaliga yuborilmadi: %s", e)
+
+    if not sent:
+        for admin_id in settings.admins:
+            try:
+                await bot.send_document(admin_id, FSInputFile(path), caption=text_caption)
+                sent = True
+            except Exception as e:
+                log.warning("Zaxira adminga yuborilmadi (%s): %s", admin_id, e)
 
     if sent:
         await store.set_value(

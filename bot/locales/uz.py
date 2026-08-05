@@ -499,6 +499,52 @@ def job_review_caption(job: Job, author: User) -> str:
     )
 
 
+def duplicate_warning(other) -> str:  # noqa: ANN001
+    """Bir chek ikki marta ishlatilganda moderatorga ogohlantirish."""
+    return (
+        f"\n\n🚨 <b>DIQQAT: BU CHEK ALLAQACHON ISHLATILGAN</b>\n"
+        f"Ariza <code>#{other.id}</code> · {other.user.mention}\n"
+        f"💼 {other.job.title} (#{other.job.id})\n"
+        f"📅 {fmt_date(other.job.work_date)}\n\n"
+        f"<i>Aynan shu rasm oldin ham yuborilgan. Tasdiqlashdan oldin "
+        f"tekshiring.</i>"
+    )
+
+
+def undo_after_confirm(job: Job) -> str:
+    return (
+        f"↩️ <b>«{job.title}»</b> bo'yicha qaror qaytarildi.\n\n"
+        f"Arizangiz yana tekshiruvga tushdi. Natijasi haqida xabar beramiz.\n\n"
+        f"⚠️ Tasdiqlanmaguncha ishga bormang."
+    )
+
+
+def undo_after_reject(job: Job) -> str:
+    return (
+        f"↩️ <b>«{job.title}»</b> bo'yicha rad etish bekor qilindi.\n\n"
+        f"Arizangiz yana tekshiruvga tushdi — bu xato bo'lgan ekan. "
+        f"Natijasi haqida xabar beramiz."
+    )
+
+
+ASK_JOB_MESSAGE = (
+    "📨 <b>Yozilganlarga xabar</b>\n\n"
+    "Yubormoqchi bo'lgan matnni yozing. U bu ishga yozilgan barcha "
+    "ishchilarga boradi.\n\n"
+    "<i>Masalan: Bugun yomg'ir kutilyapti, issiq kiyining.</i>\n\n"
+    "Bekor qilish: /cancel"
+)
+
+
+def job_message(job: Job, text: str) -> str:
+    return (
+        f"📨 <b>Ish bo'yicha xabar</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+        f"{text}"
+    )
+
+
 ASK_REJECT_REASON = (
     "✍️ Rad etish sababini yozing (ishchiga shu matn boradi).\n\n"
     "Sababsiz o'tkazish uchun /skip"
@@ -513,7 +559,7 @@ ASK_DECLINE_REASON = (
 
 def settings_view(
     channel: str, moderation: str, card: str, holder: str, fee: int,
-    hold: int, wait: int, free_mode: bool, no_show: int,
+    hold: int, wait: int, free_mode: bool, no_show: int, backup: str = "",
 ) -> str:
     mode = (
         "🆓 <b>BEPUL REJIM</b> — yangi e'lonlar avtomat bepul bo'ladi.\n"
@@ -527,7 +573,8 @@ def settings_view(
         "⚙️ <b>Sozlamalar</b>\n\n"
         f"{mode}\n\n"
         f"📢 <b>Kanallar:</b> {channel}\n"
-        f"👮 <b>Moderatsiya chati:</b> {moderation}\n\n"
+        f"👮 <b>Moderatsiya guruhi:</b> {moderation}\n"
+        f"💾 <b>Zaxira kanali:</b> {backup}\n\n"
         f"💳 <b>Karta:</b> <code>{card}</code>\n"
         f"👤 <b>Karta egasi:</b> {holder}\n"
         f"🎫 <b>Standart to'lov:</b> {money(fee)}\n\n"
@@ -617,6 +664,74 @@ CONNECT_CHANNEL = (
     "shu yerga yuboring.\n\n"
     "Bekor qilish: /cancel"
 )
+
+def single_chat_view(kind: str, title: str, chat_id: str) -> str:
+    if kind == "moderation":
+        head = "👮 <b>Moderatsiya guruhi</b>"
+        what = "To'lov cheklari shu yerga tushadi."
+        empty = (
+            "❌ <b>Ulanmagan.</b>\n\n"
+            "Hozir cheklar to'g'ridan-to'g'ri adminlarga boradi — "
+            "yo'qolmaydi, lekin moderatorlar ko'ra olmaydi."
+        )
+    else:
+        head = "💾 <b>Zaxira kanali</b>"
+        what = "Bazaning kunlik nusxalari shu yerga tushadi."
+        empty = (
+            "❌ <b>Ulanmagan.</b>\n\n"
+            "Hozir zaxira nusxalar adminlarga shaxsan boradi va boshqa "
+            "xabarlar orasida ko'milib ketishi mumkin."
+        )
+
+    if not chat_id:
+        return f"{head}\n\n{what}\n\n{empty}"
+
+    return (
+        f"{head}\n\n"
+        f"🟢 <b>{title}</b>\n"
+        f"ID: <code>{chat_id}</code>\n\n"
+        f"{what}\n\n"
+        f"<i>Faqat BITTA chat ulanadi. Boshqasini ulash uchun avval shuni "
+        f"uzing — aks holda ma'lumot ikki joyga bo'linib ketadi.</i>"
+    )
+
+
+ALREADY_CONNECTED = (
+    "❗️ <b>Allaqachon ulangan.</b>\n\n"
+    "Yangisini ulash uchun avval hozirgisini <b>🔌 Uzish</b> tugmasi bilan "
+    "uzing."
+)
+
+CONNECTED_MODERATION = (
+    "✅ <b>Moderatsiya guruhi ulandi.</b>\n\n"
+    "Endi to'lov cheklari shu yerga tushadi va moderatorlar tasdiqlay oladi."
+)
+
+CONNECTED_BACKUP = (
+    "✅ <b>Zaxira kanali ulandi.</b>\n\n"
+    "Endi bazaning kunlik nusxalari shu yerga tushadi. Bu kanalni "
+    "o'chirmang — server yo'qolsa, tiklashning yagona yo'li shu."
+)
+
+CONNECT_BACKUP = (
+    "💾 <b>Zaxira kanalini ulash</b>\n\n"
+    "Bazaning kunlik nusxalari shu kanalga tushadi. Alohida <b>yopiq "
+    "kanal</b> oching — shunda nusxalar boshqa xabarlar orasida "
+    "ko'milib ketmaydi.\n\n"
+    "<b>1.</b> Kanal yarating va botni <b>admin</b> qilib qo'shing.\n"
+    "<b>2.</b> O'sha kanaldagi istalgan xabarni shu yerga <b>forward "
+    "qiling</b>, yoki <code>@kanal_nomi</code> deb yozing.\n\n"
+    "Guruh ishlatsangiz: guruhda <code>/id</code> yozib, raqamni yuboring.\n\n"
+    "Bekor qilish: /cancel"
+)
+
+
+CHAT_KICKED_WARNING = (
+    "🚨 <b>Bot «{title}» dan chiqarib yuborildi!</b>\n\n"
+    "{what}\n\n"
+    "⚙️ Sozlamalardan qayta ulang yoki botni chatga qaytaring."
+)
+
 
 CONNECT_MODERATION = (
     "👮 <b>Moderatsiya chatini ulash</b>\n\n"
