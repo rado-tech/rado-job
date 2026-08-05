@@ -190,10 +190,16 @@ class User(Base):
 
     @property
     def reliability(self) -> str:
-        total = self.completed_count + self.no_show_count
+        # `or 0` — ustun yangi qo'shilgan bo'lsa eski qatorlarda NULL
+        # bo'lishi mumkin. Bunda matn yasash yiqilmasligi kerak: bu
+        # moderator ko'radigan kartochkada chiqadi va butun oqimni
+        # to'xtatib qo'yardi.
+        done = self.completed_count or 0
+        missed = self.no_show_count or 0
+        total = done + missed
         if total == 0:
             return "yangi"
-        return f"{self.completed_count}/{total} ishga chiqqan"
+        return f"{done}/{total} ishga chiqqan"
 
 
 class Job(Base):

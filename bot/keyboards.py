@@ -28,6 +28,7 @@ from bot.callbacks import (
     ModCB,
     NavCB,
     PickCB,
+    RejCB,
     ReportCB,
     SetCB,
     StaffCB,
@@ -482,6 +483,29 @@ def moderation_kb(booking_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+REJECT_REASONS = {
+    "fake": "Chek soxta ko'rinadi",
+    "amount": "Summa noto'g'ri",
+    "old": "Eski chek qayta yuborilgan",
+    "notfound": "To'lov kelib tushmadi",
+}
+
+
+def reject_reasons_kb(booking_id: int) -> InlineKeyboardMarkup:
+    """Tayyor sabablar.
+
+    Moderator ko'p hollarda matn yozmasligi kerak — bu tez va xatosiz.
+    «Boshqa sabab» tanlansa yozish so'raladi.
+    """
+    kb = InlineKeyboardBuilder()
+    for key, label in REJECT_REASONS.items():
+        kb.button(text=label, callback_data=RejCB(key=key, booking_id=booking_id).pack())
+    kb.button(text="✍️ Boshqa sabab", callback_data=RejCB(key="other", booking_id=booking_id).pack())
+    kb.button(text="⬅️ Bekor qilish", callback_data=RejCB(key="back", booking_id=booking_id).pack())
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def undo_kb(booking_id: int) -> InlineKeyboardMarkup:
     """Qaror qabul qilingandan keyin — xatoni tuzatish imkoni."""
     kb = InlineKeyboardBuilder()
@@ -684,6 +708,25 @@ def category_options() -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------- xodimlar
+
+def ad_channels_kb(items: list[Channel], picked: list[int]) -> InlineKeyboardMarkup:
+    """Reklama uchun kanal tanlash (ko'p tanlovli)."""
+    kb = InlineKeyboardBuilder()
+    for c in items:
+        mark = "✅ " if c.id in picked else "▫️ "
+        kb.button(
+            text=mark + (c.title or str(c.chat_id)),
+            callback_data=PickCB(field="adch", value=str(c.id)).pack(),
+        )
+    kb.adjust(1)
+    kb.row(
+        InlineKeyboardButton(
+            text=f"✔️ Tayyor ({len(picked)} ta)",
+            callback_data=PickCB(field="adch", value="__done__").pack(),
+        )
+    )
+    return kb.as_markup()
+
 
 def staff_kb(members: list[User]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()

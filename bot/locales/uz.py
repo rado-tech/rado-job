@@ -87,6 +87,16 @@ REGISTERED_EMPLOYER = (
     "«➕ E'lon berish» tugmasi orqali birinchi e'loningizni joylang."
 )
 
+ROLE_CHANGED_WORKER = (
+    "✅ Endi siz <b>ish qidiruvchi</b>siz.\n\n"
+    "«🔎 Ish qidirish» tugmasi orqali e'lonlarni ko'ring."
+)
+ROLE_CHANGED_EMPLOYER = (
+    "✅ Endi siz <b>ish beruvchi</b>siz.\n\n"
+    "«➕ E'lon berish» tugmasi orqali e'lon joylang. E'lon administrator "
+    "tekshiruvidan o'tgach chiqadi."
+)
+
 MAIN_MENU = "🏠 Asosiy menyu"
 BLOCKED = "🚫 Hisobingiz bloklangan. Sabab bo'yicha administrator bilan bog'laning."
 TOO_FAST = "⏳ Biroz sekinroq, iltimos."
@@ -476,17 +486,25 @@ PAYMENT_NOT_READY = (
 ADMIN_WELCOME = "🛠 <b>Admin panel</b>"
 
 
-def moderation_caption(b: Booking, taken: int) -> str:
+def moderation_caption(b: Booking, taken: int, *, source: str | None = None) -> str:
+    """Moderator ko'radigan chek kartochkasi.
+
+    ID lar <code> ichida — bosib nusxalash mumkin, qidirishda asqotadi.
+    """
+    src_line = f"📡 Manba: <b>{source}</b>\n" if source else "📡 Manba: bevosita botdan\n"
     return (
         f"💳 <b>YANGI TO'LOV CHEKI</b>\n\n"
         f"👤 {b.user.mention}\n"
         f"📱 <code>{b.user.phone}</code>\n"
-        f"📍 {b.user.region} · {b.user.reliability}\n\n"
-        f"💼 <b>{b.job.title}</b> (#{b.job.id})\n"
+        f"📍 {b.user.region} · {b.user.reliability}\n"
+        f"{src_line}\n"
+        f"💼 <b>{b.job.title}</b>\n"
+        f"🆔 E'lon: <code>#{b.job.id}</code>\n"
         f"📅 {fmt_date(b.job.work_date)} · 🕗 {b.job.start_time}\n"
+        f"📍 {b.job.region} · {category_name(b.job.category)}\n"
         f"🎫 Summa: <b>{money(b.job.fee)}</b>\n"
         f"👥 Band: <b>{taken}/{b.job.slots_total}</b>\n\n"
-        f"🆔 Ariza: <code>#{b.id}</code>"
+        f"🧾 Ariza: <code>#{b.id}</code>"
     )
 
 
@@ -544,6 +562,11 @@ def job_message(job: Job, text: str) -> str:
         f"{text}"
     )
 
+
+CHOOSE_REJECT_REASON = (
+    "❌ <b>Rad etish sababi</b>\n\n"
+    "Tayyor sabablardan birini tanlang — ishchiga shu matn boradi."
+)
 
 ASK_REJECT_REASON = (
     "✍️ Rad etish sababini yozing (ishchiga shu matn boradi).\n\n"

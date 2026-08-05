@@ -128,11 +128,24 @@ async def pick_role(
         user.role = Role.EMPLOYER if callback_data.value == "employer" else Role.WORKER
         await session.commit()
 
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer()
+
+    # Allaqachon ro'yxatdan o'tgan bo'lsa — telefonni QAYTA so'ramaymiz.
+    # Ilgari /rol bosgan odamdan raqam yana so'ralardi: keraksiz va chalkash.
+    if user.is_registered:
+        await state.set_state(None)
+        await call.message.answer(
+            texts.ROLE_CHANGED_EMPLOYER
+            if user.role == Role.EMPLOYER
+            else texts.ROLE_CHANGED_WORKER,
+            reply_markup=main_menu(user),
+        )
+        return
+
     intro = texts.START_EMPLOYER if callback_data.value == "employer" else texts.START_WORKER
     await state.set_state(Reg.phone)
-    await call.message.edit_reply_markup(reply_markup=None)
     await call.message.answer(intro, reply_markup=phone_kb())
-    await call.answer()
 
 
 @router.message(Reg.phone, F.contact)

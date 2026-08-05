@@ -11,7 +11,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, ErrorEvent
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    ErrorEvent,
+)
 
 from bot import runtime, scheduler
 from bot.config import settings
@@ -63,19 +68,51 @@ log = logging.getLogger("bot")
 
 
 async def set_commands(bot: Bot) -> None:
-    await bot.set_my_commands(
-        [
-            BotCommand(command="start", description="Boshlash"),
-            BotCommand(command="ishlar", description="Ochiq e'lonlar"),
-            BotCommand(command="mening", description="Mening ishlarim"),
-            BotCommand(command="profil", description="Profil"),
-            BotCommand(command="til", description="Til / Язык"),
-            BotCommand(command="kasb", description="Qiziqishlarim"),
-            BotCommand(command="shikoyat", description="Shikoyat / Жалоба"),
-            BotCommand(command="help", description="Yordam"),
-        ],
-        scope=BotCommandScopeAllPrivateChats(),
-    )
+    """Telegram «/» menyusi.
+
+    Ikkita nozik joy bor:
+
+    1. Ro'yxat DOIRA (scope) bo'yicha saqlanadi. Faqat "shaxsiy chat"
+       doirasiga o'rnatsak, guruhda Telegram STANDART doirani ko'rsatadi —
+       u esa BotFather'da qo'lda kiritilgan eski ro'yxat bo'lishi mumkin.
+       Shuning uchun standart doirani ham o'rnatamiz.
+
+    2. Eski ro'yxat qolib ketmasligi uchun avval tozalaymiz. Aks holda
+       yangi buyruq (masalan /til) qo'shilsa ham, mijozda eskisi
+       ko'rinaverishi mumkin.
+    """
+    commands = [
+        BotCommand(command="start", description="Boshlash / Начать"),
+        BotCommand(command="ishlar", description="Ochiq e'lonlar / Вакансии"),
+        BotCommand(command="mening", description="Mening ishlarim / Мои работы"),
+        BotCommand(command="profil", description="Profil / Профиль"),
+        BotCommand(command="til", description="🌐 Til / Язык"),
+        BotCommand(command="kasb", description="Qiziqishlarim / Категории"),
+        BotCommand(command="dost", description="🎁 Do'st chaqirish / Пригласить"),
+        BotCommand(command="rol", description="Rolni almashtirish / Сменить роль"),
+        BotCommand(command="shikoyat", description="🆘 Shikoyat / Жалоба"),
+        BotCommand(command="help", description="Yordam / Помощь"),
+    ]
+
+    for scope in (None, BotCommandScopeAllPrivateChats()):
+        try:
+            if scope is None:
+                await bot.delete_my_commands()
+                await bot.set_my_commands(commands)
+            else:
+                await bot.delete_my_commands(scope=scope)
+                await bot.set_my_commands(commands, scope=scope)
+        except Exception as e:
+            log.warning("Buyruqlar ro'yxati o'rnatilmadi (%s): %s", scope, e)
+
+    # Guruhlarda bot deyarli hech narsa qilmaydi — ro'yxat ham qisqa.
+    try:
+        await bot.set_my_commands(
+            [BotCommand(command="id", description="Chat ID sini ko'rsatish")],
+            scope=BotCommandScopeAllGroupChats(),
+        )
+    except Exception as e:
+        log.warning("Guruh buyruqlari o'rnatilmadi: %s", e)
 
 
 async def main() -> None:

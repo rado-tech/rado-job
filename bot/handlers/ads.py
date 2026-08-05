@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.callbacks import PickCB
 from bot.config import CATEGORY_NAMES
 from bot.db.base import SessionMaker
-from bot.keyboards import BTN_ADS, admin_menu, categories_kb, regions_kb
+from bot.keyboards import BTN_ADS, ad_channels_kb, admin_menu, categories_kb, regions_kb
 from bot.permissions import IsAdmin
 from bot.services import broadcast, channels as ch, jobs as svc
 from bot.states import Ad
@@ -97,7 +97,8 @@ async def _ask_audience(message: Message, state: FSMContext) -> None:
     kb.button(text="🌍 Barcha foydalanuvchilar", callback_data=PickCB(field="adaud", value="all").pack())
     kb.button(text="📍 Hudud bo'yicha", callback_data=PickCB(field="adaud", value="region").pack())
     kb.button(text="🧰 Kasb bo'yicha", callback_data=PickCB(field="adaud", value="category").pack())
-    kb.button(text="📢 Kanallarga joylash", callback_data=PickCB(field="adaud", value="channels").pack())
+    kb.button(text="📢 Barcha kanallarga", callback_data=PickCB(field="adaud", value="channels").pack())
+    kb.button(text="📡 Tanlangan kanallarga", callback_data=PickCB(field="adaud", value="pickch").pack())
     kb.adjust(1)
     await message.answer("👥 <b>Kimga yuboramiz?</b>", reply_markup=kb.as_markup())
 
@@ -120,7 +121,49 @@ async def ad_audience(
         await call.message.answer("🧰 Kasbni tanlang:", reply_markup=categories_kb("adcat"))
         return
 
+    if choice == "pickch":
+        items = await ch.all_channels(session, only_active=True)
+        if not items:
+            await call.message.answer("❌ Faol kanal yo'q.")
+            await state.clear()
+            return
+        await state.set_state(Ad.pick)
+        await state.update_data(picked=[])
+        await call.message.answer(
+            "📡 <b>Qaysi kanallarga?</b>\n\nBir nechtasini tanlashingiz mumkin.",
+            reply_markup=ad_channels_kb(items, []),
+        )
+        return
+
     await _preview(call.message, state, session)
+
+
+@router.callback_query(Ad.pick, PickCB.filter(F.field == "adch"))
+async def ad_pick_channels(
+    call: CallbackQuery, callback_data: PickCB, state: FSMContext, session: AsyncSession
+) -> None:
+    data = await state.get_data()
+    picked: list[int] = list(data.get("picked", []))
+
+    if callback_data.value == "__done__":
+        if not picked:
+            await call.answer("Kamida bittasini tanlang.", show_alert=True)
+            return
+        await call.message.edit_reply_markup(reply_markup=None)
+        await call.answer()
+        await _preview(call.message, state, session)
+        return
+
+    cid = int(callback_data.value)
+    if cid in picked:
+        picked.remove(cid)
+    else:
+        picked.append(cid)
+    await state.update_data(picked=picked)
+
+    items = await ch.all_channels(session, only_active=True)
+    await call.message.edit_reply_markup(reply_markup=ad_channels_kb(items, picked))
+    await call.answer()
 
 
 @router.callback_query(Ad.pick, PickCB.filter(F.field.in_({"adreg", "adcat"})))
@@ -151,10 +194,11 @@ async def _preview(message: Message, state: FSMContext, session: AsyncSession) -
     data = await state.get_data()
     bot = message.bot
 
-    if data["mode"] == "channels":
-        targets = await ch.all_channels(session, only_active=True)
+    if data["mode"] in ("channels", "pickch"):
+        targets = await _ad_channels(session, data)
         count = len(targets)
-        who = f"{count} ta kanal/guruh"
+        names = ", ".join(t.title or str(t.chat_id) for t in targets[:3])
+        who = f"{count} ta kanal" + (f" ({names}…)" if count > 3 else f" ({names})")
     else:
         ids = await svc.audience(
             session, region=data.get("region"), category=data.get("category")
@@ -214,7 +258,7 @@ async def ad_confirm(
     await call.message.edit_reply_markup(reply_markup=None)
     await call.answer("🚀 Boshlandi")
 
-    if data["mode"] == "channels":
+    if data["mode"] in ("channels", "pickch"):
         await _send_to_channels(bot, session, data, call.from_user.id)
         return
 
@@ -223,8 +267,17 @@ async def ad_confirm(
     asyncio.create_task(_run(bot, data, call.from_user.id))
 
 
+async def _ad_channels(session: AsyncSession, data: dict) -> list:
+    """Reklama boradigan kanallar: hammasi yoki tanlanganlari."""
+    items = await ch.all_channels(session, only_active=True)
+    if data.get("mode") == "pickch":
+        picked = set(data.get("picked", []))
+        return [c for c in items if c.id in picked]
+    return items
+
+
 async def _send_to_channels(bot: Bot, session: AsyncSession, data: dict, report_to: int) -> None:
-    targets = await ch.all_channels(session, only_active=True)
+    targets = await _ad_channels(session, data)
     ok, errors = 0, []
     for channel in targets:
         try:
