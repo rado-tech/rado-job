@@ -48,31 +48,27 @@ router = Router(name="jobedit")
 # chunki ular allaqachon eski ma'lumot bilan yo'lga chiqqan bo'lishi mumkin.
 CRITICAL = {"secret", "location", "work_date", "start_time", "region", "salary"}
 
-FIELD_LABEL = {
-    "category": "🧰 Ish turi",
-    "title": "📝 Nom",
-    "description": "📄 Tavsif",
-    "secret": "🔒 Maxfiy ma'lumot",
-    "location": "🗺 Lokatsiya",
-    "region": "📍 Hudud",
-    "work_date": "📅 Sana",
-    "start_time": "🕗 Vaqt",
-    "salary": "💰 Ish haqi",
-    "slots": "👥 Kishi soni",
+# Matnlar texts orqali olinadi — modul yuklanganda emas, CHAQIRUV paytida.
+# Aks holda ular o'zbekchaga qotib qolardi va ruscha ish beruvchi baribir
+# o'zbekcha ko'rardi.
+EDIT_KB = {
+    "category": lambda: categories_kb("ejcat"),
+    "location": lambda: skip_kb("ejloc"),
+    "region": lambda: regions_kb("ejreg"),
+    "work_date": lambda: dates_kb("ejdate"),
+    "start_time": times_kb,
+    "salary": salaries_kb,
+    "slots": slots_kb,
 }
+EDITABLE = list(EDIT_KB) + ["title", "description", "secret"]
 
-PROMPTS = {
-    "category": ("Yangi ish turini tanlang:", lambda: categories_kb("ejcat")),
-    "title": ("Yangi nomni yozing:", None),
-    "description": ("Yangi tavsifni yozing:", None),
-    "secret": ("Yangi maxfiy ma'lumotni yozing (manzil, mas'ul, telefon):", None),
-    "location": ("Yangi lokatsiyani yuboring (📎 → Location):", lambda: skip_kb("ejloc")),
-    "region": ("Yangi hududni tanlang:", lambda: regions_kb("ejreg")),
-    "work_date": ("Yangi sanani tanlang:", lambda: dates_kb("ejdate")),
-    "start_time": ("Yangi vaqtni tanlang yoki yozing:", times_kb),
-    "salary": ("Yangi ish haqini tanlang yoki yozing:", salaries_kb),
-    "slots": ("Nechta kishi kerak?", slots_kb),
-}
+
+def field_label(field: str) -> str:
+    return texts.FIELD_LABEL[field]
+
+
+def edit_prompt(field: str) -> str:
+    return texts.EDIT_PROMPT[field]
 
 
 async def _load(session: AsyncSession, job_id: int, user: User) -> Job | None:
@@ -93,14 +89,10 @@ async def edit_menu(
 ) -> None:
     job = await _load(session, callback_data.job_id, user)
     if job is None:
-        await call.answer("Topilmadi yoki ruxsat yo'q", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
     await call.message.answer(
-        f"✏️ <b>«{job.title}» e'lonini tahrirlash</b>\n\n"
-        f"Qaysi maydonni o'zgartiramiz?\n\n"
-        f"<i>Manzil, sana, vaqt yoki haq o'zgarsa — yozilganlarga avtomat "
-        f"xabar beriladi.</i>",
-        reply_markup=edit_job_kb(job.id),
+        texts.edit_menu_text(job), reply_markup=edit_job_kb(job.id)
     )
     await call.answer()
 
@@ -112,22 +104,21 @@ async def edit_field(
 ) -> None:
     job = await _load(session, callback_data.job_id, user)
     if job is None:
-        await call.answer("Topilmadi yoki ruxsat yo'q", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
     field = callback_data.field
-    if field not in PROMPTS:
+    if field not in EDITABLE:
         await call.answer()
         return
 
     await state.set_state(EditJob.value)
     await state.update_data(edit_job_id=job.id, edit_field=field)
 
-    prompt, kb_factory = PROMPTS[field]
+    factory = EDIT_KB.get(field)
     current = _current_value(job, field)
     await call.message.answer(
-        f"{FIELD_LABEL[field]}\n\n<b>Hozirgi:</b> {current}\n\n{prompt}\n\n"
-        f"Bekor qilish: /cancel",
-        reply_markup=kb_factory() if kb_factory else None,
+        texts.edit_field_prompt(field_label(field), current, edit_prompt(field)),
+        reply_markup=factory() if factory else None,
     )
     await call.answer()
 
@@ -199,7 +190,7 @@ async def got_text(
     field = data.get("edit_field")
     parsed = _parse(field, message.text)
     if parsed is None:
-        await message.answer("❗️ Qiymatni tushunmadim. Qaytadan urinib ko'ring yoki /cancel")
+        await message.answer(texts.VALUE_NOT_UNDERSTOOD)
         return
     await _apply(message, state, session, user, bot, value=parsed)
 
@@ -269,8 +260,7 @@ async def _apply(
 
     new = _current_value(job, field)
     await message.answer(
-        f"✅ <b>{FIELD_LABEL[field]}</b> o'zgartirildi.\n\n"
-        f"Eski: {old}\nYangi: {new}"
+        texts.field_changed(field_label(field), old, new)
     )
 
     if field in CRITICAL:
@@ -284,7 +274,7 @@ async def _apply(
         try:
             await bot.send_message(
                 job.created_by,
-                texts.job_edited_by_staff(job, FIELD_LABEL[field], new),
+                texts.job_edited_by_staff(job, field_label(field), new),
             )
         except Exception as e:
             log.debug("Muallifga tahrir xabari yetmadi: %s", e)
@@ -313,7 +303,7 @@ async def _notify_workers(
         f"⚠️ <b>ISH MA'LUMOTI O'ZGARDI</b>\n\n"
         f"💼 {job.title}\n"
         f"📅 {texts.fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
-        f"<b>{FIELD_LABEL[field]}</b> yangilandi:\n{new_value}\n\n"
+        f"<b>{field_label(field)}</b> yangilandi:\n{new_value}\n\n"
         f"👇 To'liq ma'lumot:"
     )
     sent = 0
@@ -342,7 +332,7 @@ async def message_ask(
     """
     job = await _load(session, callback_data.job_id, user)
     if job is None:
-        await call.answer("Topilmadi yoki ruxsat yo'q", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
 
     bookings = await svc.job_workers(session, job.id)
@@ -400,7 +390,7 @@ async def cancel_ask(
 ) -> None:
     job = await _load(session, callback_data.job_id, user)
     if job is None:
-        await call.answer("Topilmadi yoki ruxsat yo'q", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
     if job.status == JobStatus.CANCELLED:
         await call.answer("Bu e'lon allaqachon bekor qilingan.", show_alert=True)

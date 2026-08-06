@@ -465,6 +465,76 @@ NEW_JOB_SALARY = "💰 <b>9/10 · Ishchi oladigan haq</b>\n\nTugmani bosing yoki
 NEW_JOB_SLOTS = "👥 <b>10/10 · Necha kishi kerak?</b>"
 NEW_JOB_FEE = "🎫 <b>Yozilish to'lovi</b>"
 
+# --- tugma yozuvlari (e'lon yaratish oqimi) ---
+BTN_PUBLISH = "✅ E'lon qilish"
+BTN_SEND_REVIEW = "📨 Tasdiqqa yuborish"
+BTN_CANCEL = "🚫 Bekor qilish"
+BTN_DONE = "✔️ Tayyor"
+BTN_ALL_CATEGORIES = "🌐 Barchasi"
+BTN_SKIP = "⏭ O'tkazib yuborish"
+BTN_BACK_SHORT = "⬅️ Orqaga"
+
+FIELD_SHORT = {
+    "category": "🧰 Tur",
+    "title": "📝 Nom",
+    "description": "📄 Tavsif",
+    "secret": "🔒 Yopiq",
+    "location": "🗺 Lokatsiya",
+    "region": "📍 Hudud",
+    "work_date": "📅 Sana",
+    "start_time": "🕗 Vaqt",
+    "salary": "💰 Haq",
+    "slots": "👥 Kishi",
+    "fee": "🎫 To'lov",
+}
+
+# --- oldindan ko'rish ---
+PREVIEW_PUBLIC = "👀 <b>E'londa ko'rinadi:</b>"
+PREVIEW_SECRET = "🔒 <b>Faqat ishga yozilganlarga ko'rinadi:</b>"
+PREVIEW_CONFIRM = "Hammasi to'g'rimi?"
+LOC_ATTACHED = "🗺 Lokatsiya biriktirilgan ✅"
+LOC_NONE = "🗺 Lokatsiya yo'q (ixtiyoriy)"
+
+# --- qadam javoblari ---
+SAVED_CATEGORY = "🧰 Tur: <b>{v}</b>"
+SAVED_REGION = "📍 Hudud: <b>{v}</b>"
+SAVED_DATE = "📅 Sana: <b>{v}</b>"
+SAVED_TIME = "🕗 Vaqt: <b>{v}</b>"
+SAVED_SALARY = "💰 Ish haqi: <b>{v}</b>"
+SAVED_SLOTS = "👥 Kerak: <b>{v} kishi</b>"
+SAVED_FEE = "🎫 Yozilish to'lovi: <b>{v}</b>"
+SAVED_LOCATION = "📍 Lokatsiya saqlandi."
+SAVED_LOCATION_NAMED = "📍 Lokatsiya saqlandi: <b>{v}</b>"
+SKIPPED_LOCATION = "🗺 Lokatsiya qo'shilmadi."
+
+LOCATION_WRONG = (
+    "❗️ Bu lokatsiya emas.\n\n"
+    "📎 → <b>Location</b> → xaritada joyni tanlang → yuboring.\n"
+    "Yoki yuqoridagi «⏭ O'tkazib yuborish» tugmasini bosing."
+)
+BAD_PAST_DATE = "❗️ O'tib ketgan sanaga e'lon berib bo'lmaydi."
+BAD_SLOTS = "❗️ 1 dan 500 gacha raqam kiriting."
+
+# --- ish beruvchining e'lonlari ---
+MY_ADS_EMPTY = "📭 Sizda hali e'lon yo'q. «➕ E'lon berish» tugmasini bosing."
+MY_ADS_TITLE = "📢 <b>Sizning e'lonlaringiz</b>"
+NOT_FOUND = "Topilmadi"
+NO_ACCESS = "Ruxsat yo'q"
+NO_WORKERS_YET = "Hali tasdiqlangan ishchi yo'q."
+
+
+def job_workers_title(job: Job) -> str:
+    return f"👥 <b>«{job.title}» — tasdiqlangan ishchilar</b>"
+
+
+def clone_intro(job: Job) -> str:
+    return (
+        f"♻️ <b>«{job.title}»</b> e'loni nusxalandi.\n\n"
+        f"Faqat <b>sanani</b> tanlang — qolgani o'zgarmaydi. "
+        f"Xohlasangiz keyin istalgan maydonni tuzatasiz."
+    )
+
+
 NEW_JOB_PUBLISHED = "✅ E'lon joylandi!"
 NEW_JOB_SENT_TO_REVIEW = (
     "📨 <b>E'lon administratorga yuborildi.</b>\n\n"
@@ -548,6 +618,56 @@ def undo_after_reject(job: Job) -> str:
         f"Arizangiz yana tekshiruvga tushdi — bu xato bo'lgan ekan. "
         f"Natijasi haqida xabar beramiz."
     )
+
+
+FIELD_LABEL = {
+    "category": "🧰 Ish turi",
+    "title": "📝 Nom",
+    "description": "📄 Tavsif",
+    "secret": "🔒 Yopiq ma'lumot",
+    "location": "🗺 Lokatsiya",
+    "region": "📍 Hudud",
+    "work_date": "📅 Sana",
+    "start_time": "🕗 Vaqt",
+    "salary": "💰 Ish haqi",
+    "slots": "👥 Kishi soni",
+}
+
+EDIT_PROMPT = {
+    "category": "Yangi ish turini tanlang:",
+    "title": "Yangi nomni yozing:",
+    "description": "Yangi tavsifni yozing:",
+    "secret": "Yangi yopiq ma'lumotni yozing (manzil, mas'ul, telefon):",
+    "location": "Yangi lokatsiyani yuboring (📎 → Location):",
+    "region": "Yangi hududni tanlang:",
+    "work_date": "Yangi sanani tanlang:",
+    "start_time": "Yangi vaqtni tanlang yoki yozing:",
+    "salary": "Yangi ish haqini tanlang yoki yozing:",
+    "slots": "Nechta kishi kerak?",
+}
+
+
+def edit_field_prompt(label: str, current: str, prompt: str) -> str:
+    return (
+        f"{label}\n\n<b>Hozirgi:</b> {current}\n\n{prompt}\n\n"
+        f"Bekor qilish: /cancel"
+    )
+
+
+def field_changed(label: str, old: str, new: str) -> str:
+    return f"✅ <b>{label}</b> o'zgartirildi.\n\nEski: {old}\nYangi: {new}"
+
+
+def edit_menu_text(job: Job) -> str:
+    return (
+        f"✏️ <b>«{job.title}» e'lonini tahrirlash</b>\n\n"
+        f"Qaysi maydonni o'zgartiramiz?\n\n"
+        f"<i>Manzil, sana, vaqt yoki haq o'zgarsa — yozilganlarga avtomat "
+        f"xabar beriladi.</i>"
+    )
+
+
+VALUE_NOT_UNDERSTOOD = "❗️ Qiymatni tushunmadim. Qaytadan urinib ko'ring yoki /cancel"
 
 
 def job_edited_by_staff(job: Job, field_label: str, new_value: str) -> str:

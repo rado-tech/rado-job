@@ -62,6 +62,7 @@ from bot.middlewares import (  # noqa: E402
     UserMiddleware,
 )
 from bot import texts as texts_mod  # noqa: E402
+from bot.i18n import LANGS, set_lang  # noqa: E402
 from bot.utils import clean, local_today, parse_date, parse_int, parse_time  # noqa: E402
 
 failures = 0
@@ -247,30 +248,44 @@ check("tayyor sabablar bor", len(kb.REJECT_REASONS) >= 4)
 
 print("\n── E'lon yaratish qadamlari")
 
-from bot.handlers.jobpost import ORDER, PROMPTS  # noqa: E402
+from bot.handlers.jobpost import ORDER, prompt_for  # noqa: E402
 
 steps = [f for f in ORDER if f != "fee"]  # to'lov ish beruvchidan so'ralmaydi
 check("10 ta qadam", len(steps) == 10, str(len(steps)))
 
-wrong = []
-for i, field in enumerate(steps, 1):
-    prompt = PROMPTS[field][0]
-    if f"{i}/10" not in prompt:
-        wrong.append(f"{field}: {i}/10 kutilgan")
-check("raqamlar ketma-ket va to'g'ri", not wrong, "; ".join(wrong))
+for lang in ("uz", "ru"):
+    set_lang(lang)
+    wrong = []
+    for i, field in enumerate(steps, 1):
+        if f"{i}/10" not in prompt_for(field):
+            wrong.append(f"{field}: {i}/10 kutilgan")
+    check(f"raqamlar to'g'ri ({lang})", not wrong, "; ".join(wrong))
 
 # «To'lov» atamasi ish beruvchi ko'radigan matnlarda bo'lmasligi kerak:
 # e'lon bepul ham bo'lishi mumkin, va to'lov ish beruvchiga aloqador emas.
-bad_words = []
-for field in ("description", "secret", "location"):
-    if "to'lov qilganlar" in PROMPTS[field][0]:
-        bad_words.append(field)
+set_lang("uz")
+bad_words = [
+    f for f in ("description", "secret", "location")
+    if "to'lov qilganlar" in prompt_for(f)
+]
 check("«to'lov qilganlar» iborasi olib tashlandi", not bad_words, str(bad_words))
+
+# Eng muhimi: qadam matnlari HAQIQATAN tilga qarab o'zgaradimi.
+# Ilgari ular modul yuklanganda hisoblanib, o'zbekchaga qotib qolardi.
+set_lang("ru")
+ru_steps = [prompt_for(f) for f in steps]
+set_lang("uz")
+uz_steps = [prompt_for(f) for f in steps]
+check("qadamlar ruschaga o'tadi", all(r != u for r, u in zip(ru_steps, uz_steps)))
+set_lang("ru")
+check("ruscha matn haqiqatan ruscha", "Тип работы" in prompt_for("category"))
+check("kasb nomlari tarjima qilindi", "Погрузка" in kb.category_items()[0][1])
+check("tahrirlash matnlari ham", "Выберите" in texts_mod.EDIT_PROMPT["category"])
+check("maydon nomlari ham", "Оплата" in texts_mod.FIELD_LABEL["salary"])
+set_lang("uz")
 
 
 print("\n── Ko'p tillilik")
-
-from bot.i18n import LANGS, current_lang, set_lang  # noqa: E402
 
 set_lang("uz")
 uz_card = texts_mod.job_card(job, 2)

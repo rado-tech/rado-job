@@ -107,9 +107,9 @@ async def my_ads(message: Message, state: FSMContext, session: AsyncSession, use
     await state.set_state(None)
     jobs = await svc.jobs_by_author(session, user.id)
     if not jobs:
-        await message.answer("📭 Sizda hali e'lon yo'q. «➕ E'lon berish» tugmasini bosing.")
+        await message.answer(texts.MY_ADS_EMPTY)
         return
-    await message.answer("📢 <b>Sizning e'lonlaringiz</b>", reply_markup=jobs_list_kb(jobs))
+    await message.answer(texts.MY_ADS_TITLE, reply_markup=jobs_list_kb(jobs))
 
 
 @router.callback_query(AdminJobCB.filter(F.action == "view"))
@@ -119,7 +119,7 @@ async def owner_job_view(
     """Ish beruvchi o'z e'lonini ko'radi (admin uchun alohida handler bor)."""
     job = await svc.get_job(session, callback_data.job_id)
     if job is None or job.created_by != user.id:
-        await call.answer("Topilmadi", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
     taken = await svc.taken_count(session, job.id)
     # Ish beruvchi yozilish to'lovini ko'rmaydi — bu bizning tarifimiz.
@@ -136,7 +136,7 @@ async def owner_job_workers(
 ) -> None:
     job = await svc.get_job(session, callback_data.job_id)
     if job is None or job.created_by != user.id:
-        await call.answer("Topilmadi", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
     bookings = await svc.job_workers(session, job.id)
     # UNLOCKED = tafsilotlarni olgan hamma: tasdiqlangan, ishga chiqqan va
@@ -144,7 +144,7 @@ async def owner_job_workers(
     # belgilangach ishchi ro'yxatdan YO'QOLARDI.
     confirmed = [b for b in bookings if b.status in UNLOCKED]
     if not confirmed:
-        await call.answer("Hali tasdiqlangan ishchi yo'q.", show_alert=True)
+        await call.answer(texts.NO_WORKERS_YET, show_alert=True)
         return
     lines = [
         f"{i}. {texts.BOOKING_STATUS_LABEL[b.status]}\n"
@@ -153,32 +153,55 @@ async def owner_job_workers(
         for i, b in enumerate(confirmed, 1)
     ]
     await call.message.answer(
-        f"👥 <b>«{job.title}» — tasdiqlangan ishchilar</b>\n\n" + "\n".join(lines)
+        texts.job_workers_title(job) + "\n\n" + "\n".join(lines)
     )
     await call.answer()
 
 
 # ================================================================ qadamlar
 
-PROMPTS = {
-    "category": (texts.NEW_JOB_CATEGORY, lambda: categories_kb("njcat")),
-    "title": (texts.NEW_JOB_TITLE, None),
-    "description": (texts.NEW_JOB_DESC, None),
-    "secret": (texts.NEW_JOB_SECRET, None),
-    "location": (texts.NEW_JOB_LOCATION, lambda: skip_kb("njloc")),
-    "region": (texts.NEW_JOB_REGION, lambda: regions_kb("njreg")),
-    "work_date": (texts.NEW_JOB_DATE, lambda: dates_kb("njdate")),
-    "start_time": (texts.NEW_JOB_TIME, times_kb),
-    "salary": (texts.NEW_JOB_SALARY, salaries_kb),
-    "slots": (texts.NEW_JOB_SLOTS, slots_kb),
-    "fee": (texts.NEW_JOB_FEE, lambda: fee_kb(store.default_fee())),
+# DIQQAT: bu yerda matnning O'ZI emas, NOMI saqlanadi.
+#
+# Agar `texts.NEW_JOB_TITLE` deb yozsak, qiymat modul yuklanganda bir marta
+# hisoblanadi va o'zbekchaga QOTIB qoladi — ruscha foydalanuvchi baribir
+# o'zbekcha ko'radi. Nomni saqlab, har chaqiruvda getattr qilamiz.
+PROMPT_ATTR = {
+    "category": "NEW_JOB_CATEGORY",
+    "title": "NEW_JOB_TITLE",
+    "description": "NEW_JOB_DESC",
+    "secret": "NEW_JOB_SECRET",
+    "location": "NEW_JOB_LOCATION",
+    "region": "NEW_JOB_REGION",
+    "work_date": "NEW_JOB_DATE",
+    "start_time": "NEW_JOB_TIME",
+    "salary": "NEW_JOB_SALARY",
+    "slots": "NEW_JOB_SLOTS",
+    "fee": "NEW_JOB_FEE",
+}
+
+KB_FACTORY = {
+    "category": lambda: categories_kb("njcat"),
+    "location": lambda: skip_kb("njloc"),
+    "region": lambda: regions_kb("njreg"),
+    "work_date": lambda: dates_kb("njdate"),
+    "start_time": times_kb,
+    "salary": salaries_kb,
+    "slots": slots_kb,
+    "fee": lambda: fee_kb(store.default_fee()),
 }
 
 
+def prompt_for(field: str) -> str:
+    """Qadam matni — joriy tilda."""
+    return getattr(texts, PROMPT_ATTR[field])
+
+
 async def _ask(message: Message, state: FSMContext, field: str) -> None:
-    prompt, kb_factory = PROMPTS[field]
     await state.set_state(STATE_OF[field])
-    await message.answer(prompt, reply_markup=kb_factory() if kb_factory else None)
+    factory = KB_FACTORY.get(field)
+    await message.answer(
+        prompt_for(field), reply_markup=factory() if factory else None
+    )
 
 
 async def _next(message: Message, state: FSMContext, field: str, user: User) -> None:
@@ -210,7 +233,7 @@ async def _next(message: Message, state: FSMContext, field: str, user: User) -> 
 @router.callback_query(NewJob.category, PickCB.filter(F.field == "njcat"))
 async def s_category(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     await state.update_data(category=callback_data.value)
-    await call.message.edit_text(f"🧰 Tur: <b>{category_name(callback_data.value)}</b>")
+    await call.message.edit_text(texts.SAVED_CATEGORY.format(v=category_name(callback_data.value)))
     await call.answer()
     await _next(call.message, state, "category", user)
 
@@ -248,7 +271,7 @@ async def s_secret(message: Message, state: FSMContext, user: User) -> None:
 @router.message(NewJob.location, F.location)
 async def s_location(message: Message, state: FSMContext, user: User) -> None:
     await state.update_data(lat=message.location.latitude, lon=message.location.longitude)
-    await message.answer("📍 Lokatsiya saqlandi.")
+    await message.answer(texts.SAVED_LOCATION)
     await _next(message, state, "location", user)
 
 
@@ -258,14 +281,14 @@ async def s_venue(message: Message, state: FSMContext, user: User) -> None:
     await state.update_data(
         lat=message.venue.location.latitude, lon=message.venue.location.longitude
     )
-    await message.answer(f"📍 Lokatsiya saqlandi: <b>{message.venue.title}</b>")
+    await message.answer(texts.SAVED_LOCATION_NAMED.format(v=message.venue.title))
     await _next(message, state, "location", user)
 
 
 @router.callback_query(NewJob.location, PickCB.filter(F.field == "njloc"))
 async def s_location_skip(call: CallbackQuery, state: FSMContext, user: User) -> None:
     await state.update_data(lat=None, lon=None)
-    await call.message.edit_text("🗺 Lokatsiya qo'shilmadi.")
+    await call.message.edit_text(texts.SKIPPED_LOCATION)
     await call.answer()
     await _next(call.message, state, "location", user)
 
@@ -282,7 +305,7 @@ async def s_location_wrong(message: Message) -> None:
 @router.callback_query(NewJob.region, PickCB.filter(F.field == "njreg"))
 async def s_region(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     await state.update_data(region=callback_data.value)
-    await call.message.edit_text(f"📍 Hudud: <b>{callback_data.value}</b>")
+    await call.message.edit_text(texts.SAVED_REGION.format(v=callback_data.value))
     await call.answer()
     await _next(call.message, state, "region", user)
 
@@ -291,7 +314,7 @@ async def s_region(call: CallbackQuery, callback_data: PickCB, state: FSMContext
 async def s_date_btn(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     d = date.fromisoformat(callback_data.value)
     await state.update_data(work_date=d.isoformat())
-    await call.message.edit_text(f"📅 Sana: <b>{texts.fmt_date(d)}</b>")
+    await call.message.edit_text(texts.SAVED_DATE.format(v=texts.fmt_date(d)))
     await call.answer()
     await _next(call.message, state, "work_date", user)
 
@@ -303,7 +326,7 @@ async def s_date_text(message: Message, state: FSMContext, user: User) -> None:
         await message.answer(texts.BAD_DATE)
         return
     if d < local_today():
-        await message.answer("❗️ O'tib ketgan sanaga e'lon berib bo'lmaydi.")
+        await message.answer(texts.BAD_PAST_DATE)
         return
     await state.update_data(work_date=d.isoformat())
     await _next(message, state, "work_date", user)
@@ -313,7 +336,7 @@ async def s_date_text(message: Message, state: FSMContext, user: User) -> None:
 async def s_time_btn(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     value = parse_time(callback_data.value) or "08:00"
     await state.update_data(start_time=value)
-    await call.message.edit_text(f"🕗 Vaqt: <b>{value}</b>")
+    await call.message.edit_text(texts.SAVED_TIME.format(v=value))
     await call.answer()
     await _next(call.message, state, "start_time", user)
 
@@ -331,7 +354,7 @@ async def s_time_text(message: Message, state: FSMContext, user: User) -> None:
 @router.callback_query(NewJob.salary, PickCB.filter(F.field == "salary"))
 async def s_salary_btn(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     await state.update_data(salary=int(callback_data.value))
-    await call.message.edit_text(f"💰 Ish haqi: <b>{texts.money(int(callback_data.value))}</b>")
+    await call.message.edit_text(texts.SAVED_SALARY.format(v=texts.money(int(callback_data.value))))
     await call.answer()
     await _next(call.message, state, "salary", user)
 
@@ -349,7 +372,7 @@ async def s_salary_text(message: Message, state: FSMContext, user: User) -> None
 @router.callback_query(NewJob.slots, PickCB.filter(F.field == "slots"))
 async def s_slots_btn(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     await state.update_data(slots=int(callback_data.value))
-    await call.message.edit_text(f"👥 Kerak: <b>{callback_data.value} kishi</b>")
+    await call.message.edit_text(texts.SAVED_SLOTS.format(v=callback_data.value))
     await call.answer()
     await _next(call.message, state, "slots", user)
 
@@ -358,7 +381,7 @@ async def s_slots_btn(call: CallbackQuery, callback_data: PickCB, state: FSMCont
 async def s_slots_text(message: Message, state: FSMContext, user: User) -> None:
     v = parse_int(message.text)
     if v is None or not (1 <= v <= 500):
-        await message.answer("❗️ 1 dan 500 gacha raqam kiriting.")
+        await message.answer(texts.BAD_SLOTS)
         return
     await state.update_data(slots=v)
     await _next(message, state, "slots", user)
@@ -367,7 +390,7 @@ async def s_slots_text(message: Message, state: FSMContext, user: User) -> None:
 @router.callback_query(NewJob.fee, PickCB.filter(F.field == "fee"))
 async def s_fee_btn(call: CallbackQuery, callback_data: PickCB, state: FSMContext, user: User) -> None:
     await state.update_data(fee=int(callback_data.value))
-    await call.message.edit_text(f"🎫 Yozilish to'lovi: <b>{texts.money(int(callback_data.value))}</b>")
+    await call.message.edit_text(texts.SAVED_FEE.format(v=texts.money(int(callback_data.value))))
     await call.answer()
     await _next(call.message, state, "fee", user)
 
@@ -435,19 +458,18 @@ async def send_preview(message: Message, state: FSMContext, user: User) -> None:
     # oladi. Bo'linish MAZMUN bo'yicha: e'londa ko'rinadigan va faqat
     # yozilganlarga ochiladigan qism.
     await message.answer(
-        "👀 <b>E'londa ko'rinadi:</b>\n\n"
-        + texts.job_card(preview, 0, show_fee=staff)
+        texts.PREVIEW_PUBLIC + "\n\n" + texts.job_card(preview, 0, show_fee=staff)
     )
     secret_block = (
-        "🔒 <b>Faqat ishga yozilganlarga ko'rinadi:</b>\n\n" + data["secret"]
+        texts.PREVIEW_SECRET + "\n\n" + data["secret"]
     )
     if data.get("lat") is not None:
-        secret_block += "\n\n🗺 Lokatsiya biriktirilgan ✅"
+        secret_block += "\n\n" + texts.LOC_ATTACHED
     else:
-        secret_block += "\n\n🗺 Lokatsiya yo'q (ixtiyoriy)"
+        secret_block += "\n\n" + texts.LOC_NONE
 
     await message.answer(
-        secret_block + "\n\nHammasi to'g'rimi?",
+        secret_block + "\n\n" + texts.PREVIEW_CONFIRM,
         reply_markup=preview_kb(is_admin=staff),
     )
 
@@ -531,10 +553,10 @@ async def clone_job(
     tejamkorlik: 10 qadam o'rniga 2 bosish."""
     job = await svc.get_job(session, callback_data.job_id)
     if job is None:
-        await call.answer("Topilmadi", show_alert=True)
+        await call.answer(texts.NOT_FOUND, show_alert=True)
         return
     if not _can_post(user) or (user.role != Role.ADMIN and job.created_by != user.id):
-        await call.answer("Ruxsat yo'q", show_alert=True)
+        await call.answer(texts.NO_ACCESS, show_alert=True)
         return
 
     await state.clear()
