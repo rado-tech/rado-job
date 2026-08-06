@@ -298,10 +298,23 @@ async def change_categories(message: Message, state: FSMContext, user: User) -> 
 async def toggle_notify(message: Message, session: AsyncSession, user: User) -> None:
     user.notify = not user.notify
     await session.commit()
-    await message.answer(
-        "🔔 Xabarnoma <b>yoqildi</b>." if user.notify
-        else "🔕 Xabarnoma <b>o'chirildi</b>. Yangi e'lonlar haqida xabar kelmaydi."
-    )
+    # Aniq yozamiz: bu FAQAT yangi e'lon tarqatmasini o'chiradi. Shaxsiy
+    # xabarlar (tasdiq, eslatma, navbat) baribir keladi — aks holda odam
+    # "hech narsa kelmaydi" deb o'ylab, ishga chiqmay qoladi.
+    if user.notify:
+        await message.answer(
+            "🔔 <b>Yangi e'lonlar haqida xabar yoqildi.</b>\n\n"
+            "Hududingiz va tanlagan kasblaringizga mos e'lon chiqqanda "
+            "shu yerga xabar keladi."
+        )
+    else:
+        await message.answer(
+            "🔕 <b>Yangi e'lonlar haqida xabar o'chirildi.</b>\n\n"
+            "E'lonlarni «🔎 Ish qidirish» orqali o'zingiz ko'rasiz.\n\n"
+            "<i>Diqqat: yozilgan ishlaringiz bo'yicha xabarlar — to'lov "
+            "tasdig'i, ish eslatmasi, navbatdan joy bo'shashi — baribir "
+            "keladi. Ular o'chmaydi.</i>"
+        )
 
 
 @router.message(Command("rol"))

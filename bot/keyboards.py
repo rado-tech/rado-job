@@ -32,6 +32,8 @@ from bot.callbacks import (
     ReportCB,
     SetCB,
     StaffCB,
+    UserCB,
+    UsersCB,
     WorkerCB,
 )
 from bot.config import (
@@ -533,6 +535,7 @@ def admin_job_kb(job: Job, *, owner_view: bool = False) -> InlineKeyboardMarkup:
     kb.button(text="📨 Xabar yuborish", callback_data=AdminJobCB(action="msg", job_id=job.id).pack())
     if job.status in (JobStatus.OPEN, JobStatus.FULL, JobStatus.PENDING_REVIEW):
         kb.button(text="✏️ Tahrirlash", callback_data=AdminJobCB(action="edit", job_id=job.id).pack())
+        # Narx faqat xodim qo'lida — ish beruvchi uni ko'rmaydi ham.
         # Bekor qilish — yopishdan farqli: yozilganlarga XABAR beriladi.
         kb.button(
             text="❌ Ishni bekor qilish",
@@ -725,6 +728,88 @@ def ad_channels_kb(items: list[Channel], picked: list[int]) -> InlineKeyboardMar
             callback_data=PickCB(field="adch", value="__done__").pack(),
         )
     )
+    return kb.as_markup()
+
+
+ROLE_ICON = {
+    Role.WORKER: "👷",
+    Role.EMPLOYER: "🏢",
+    Role.MODERATOR: "🛡",
+    Role.ADMIN: "👑",
+}
+
+
+def users_list_kb(
+    users: list[User], *, page: int, total: int, per_page: int, only_blocked: bool
+) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for u in users:
+        mark = "🚫 " if u.is_blocked else ROLE_ICON.get(u.role, "👤") + " "
+        name = u.full_name or str(u.id)
+        tag = f" @{u.username}" if u.username else ""
+        kb.button(
+            text=f"{mark}{name}{tag}"[:60],
+            callback_data=UserCB(action="view", user_id=u.id).pack(),
+        )
+    kb.adjust(1)
+
+    pages = max((total + per_page - 1) // per_page, 1)
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="◀️", callback_data=UsersCB(action="page", page=page - 1).pack()
+                )
+            )
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{page + 1}/{pages}", callback_data=NavCB(to="noop").pack()
+            )
+        )
+        if page + 1 < pages:
+            nav.append(
+                InlineKeyboardButton(
+                    text="▶️", callback_data=UsersCB(action="page", page=page + 1).pack()
+                )
+            )
+        kb.row(*nav)
+
+    kb.row(
+        InlineKeyboardButton(text="🔎 Qidirish", callback_data=UsersCB(action="search").pack()),
+        InlineKeyboardButton(
+            text="👥 Hammasi" if only_blocked else "🚫 Bloklanganlar",
+            callback_data=UsersCB(action="all" if only_blocked else "blocked").pack(),
+        ),
+    )
+    return kb.as_markup()
+
+
+def user_card_kb(target: User, *, is_owner_account: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if not is_owner_account:
+        if target.is_blocked:
+            kb.button(
+                text="✅ Blokdan chiqarish",
+                callback_data=UserCB(action="unblock", user_id=target.id).pack(),
+            )
+        else:
+            kb.button(
+                text="🚫 Bloklash",
+                callback_data=UserCB(action="block", user_id=target.id).pack(),
+            )
+        if target.role == Role.MODERATOR:
+            kb.button(
+                text="🛡 Moderatorlikdan olish",
+                callback_data=UserCB(action="unmod", user_id=target.id).pack(),
+            )
+        elif target.role in (Role.WORKER, Role.EMPLOYER):
+            kb.button(
+                text="🛡 Moderator qilish",
+                callback_data=UserCB(action="mod", user_id=target.id).pack(),
+            )
+    kb.button(text="⬅️ Ro'yxatga", callback_data=UsersCB(action="page", page=0).pack())
+    kb.adjust(1)
     return kb.as_markup()
 
 

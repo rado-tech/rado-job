@@ -107,6 +107,20 @@ class StaffCB(CallbackData, prefix="st"):
     user_id: int
 
 
+class UserCB(CallbackData, prefix="u"):
+    """Bitta foydalanuvchi ustidagi amallar."""
+
+    action: str  # view | block | unblock | mod | unmod
+    user_id: int
+
+
+class UsersCB(CallbackData, prefix="ul"):
+    """Foydalanuvchilar ro'yxati: sahifalash va filtr."""
+
+    action: str  # page | search | blocked | all
+    page: int = 0
+
+
 class ChatCB(CallbackData, prefix="c"):
     """Bot yangi chatga qo'shilganda: uni kanal yoki moderatsiya chati
     sifatida belgilash, yoki o'sha chatdan chiqarib yuborish."""

@@ -88,7 +88,11 @@ async def start_new(message: Message, state: FSMContext, user: User) -> None:
         return
     await state.clear()
     await state.update_data(fee=0 if store.free_mode() else store.default_fee())
-    if store.free_mode():
+
+    # Ish beruvchi to'lov masalasini umuman ko'rmaydi: ishchilar to'laydimi
+    # yoki yo'qmi — bu bizning tarifimiz, uning ishi emas. Unga faqat
+    # xodimlar uchun mo'ljallangan eslatma ham chiqmaydi.
+    if store.free_mode() and is_staff(user):
         await message.answer(
             "🆓 <b>Bepul rejim yoqilgan</b> — bu e'lon bepul bo'ladi.\n"
             "<i>Faqat shu e'lonni pulli qilmoqchi bo'lsangiz, oxirida "
@@ -118,7 +122,8 @@ async def owner_job_view(
         await call.answer("Topilmadi", show_alert=True)
         return
     taken = await svc.taken_count(session, job.id)
-    text = texts.job_card(job, taken, secret=True)
+    # Ish beruvchi yozilish to'lovini ko'rmaydi — bu bizning tarifimiz.
+    text = texts.job_card(job, taken, secret=True, show_fee=is_staff(user))
     if job.status == JobStatus.DECLINED and job.decline_reason:
         text += f"\n\n🚫 Rad etish sababi: <i>{job.decline_reason}</i>"
     await call.message.answer(text, reply_markup=admin_job_kb(job, owner_view=True))
@@ -190,11 +195,12 @@ async def _next(message: Message, state: FSMContext, field: str, user: User) -> 
         return
 
     nxt = ORDER[idx + 1]
-    # Bepul rejimda to'lov qadami umuman so'ralmaydi — e'lon avtomat bepul.
-    # Kerak bo'lsa admin oldindan ko'rishdagi «✏️ To'lov» tugmasi bilan
-    # aynan shu e'lonni pulli qila oladi.
-    if nxt == "fee" and store.free_mode():
-        await state.update_data(fee=0)
+    # To'lov qadami quyidagi hollarda so'ralmaydi:
+    #   * bepul rejim yoqilgan — e'lon avtomat bepul
+    #   * e'lonni ISH BERUVCHI berayotgan — narxni biz belgilaymiz
+    # Xodim kerak bo'lsa oldindan ko'rishdagi «✏️ To'lov» bilan o'zgartiradi.
+    if nxt == "fee" and (store.free_mode() or not is_staff(user)):
+        await state.update_data(fee=0 if store.free_mode() else store.default_fee())
         await send_preview(message, state, user)
         return
 
@@ -421,10 +427,12 @@ async def send_preview(message: Message, state: FSMContext, user: User) -> None:
     data = await state.get_data()
     preview = build_job(data, user.id, JobStatus.OPEN)
     preview.id = 0
+    staff = is_staff(user)
 
     await state.set_state(NewJob.preview)
     await message.answer(
-        "👀 <b>Hamma ko'radigan qism:</b>\n\n" + texts.job_card(preview, 0)
+        "👀 <b>Hamma ko'radigan qism:</b>\n\n"
+        + texts.job_card(preview, 0, show_fee=staff)
     )
     secret_block = "🔒 <b>Faqat to'lov qilganlar ko'radi:</b>\n\n" + data["secret"]
     if data.get("lat") is not None:
@@ -434,7 +442,7 @@ async def send_preview(message: Message, state: FSMContext, user: User) -> None:
 
     await message.answer(
         secret_block + "\n\nHammasi to'g'rimi?",
-        reply_markup=preview_kb(is_admin=is_staff(user)),
+        reply_markup=preview_kb(is_admin=staff),
     )
 
 

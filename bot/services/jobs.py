@@ -850,6 +850,66 @@ async def recent_jobs(session: AsyncSession, limit: int = 20) -> list[Job]:
     return list((await session.scalars(stmt)).all())
 
 
+async def list_users(
+    session: AsyncSession,
+    *,
+    offset: int = 0,
+    limit: int = 10,
+    only_blocked: bool = False,
+) -> tuple[list[User], int]:
+    """Foydalanuvchilar ro'yxati (sahifalab)."""
+    conditions = []
+    if only_blocked:
+        conditions.append(User.is_blocked.is_(True))
+
+    total = int(
+        (await session.scalar(select(func.count()).select_from(User).where(*conditions))) or 0
+    )
+    stmt = (
+        select(User)
+        .where(*conditions)
+        .order_by(User.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return list((await session.scalars(stmt)).all()), total
+
+
+async def search_users(session: AsyncSession, query: str, limit: int = 10) -> list[User]:
+    """ID, @username yoki ism bo'yicha qidiruv.
+
+    Aniq ID/username topilsa — o'shani qaytaradi. Aks holda ism va
+    username bo'yicha qismiy moslik izlaydi: to'liq yozish shart emas.
+    """
+    q = (query or "").strip().lstrip("@")
+    if not q:
+        return []
+
+    if q.isdigit():
+        found = await session.get(User, int(q))
+        if found:
+            return [found]
+
+    pattern = f"%{q.lower()}%"
+    stmt = (
+        select(User)
+        .where(
+            or_(
+                func.lower(User.username).like(pattern),
+                func.lower(User.full_name).like(pattern),
+            )
+        )
+        .order_by(User.created_at.desc())
+        .limit(limit)
+    )
+    return list((await session.scalars(stmt)).all())
+
+
+async def set_blocked(session: AsyncSession, target: User, blocked: bool) -> None:
+    target.is_blocked = blocked
+    await session.commit()
+
+
 async def find_user(session: AsyncSession, query: str) -> User | None:
     q = query.strip().lstrip("@")
     if q.isdigit():

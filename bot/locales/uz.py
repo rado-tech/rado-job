@@ -117,6 +117,7 @@ def job_card(
     secret: bool = False,
     show_slots: bool = True,
     waitlist: int = 0,
+    show_fee: bool = True,
 ) -> str:
     """Bitta e'lonning to'liq ko'rinishi.
 
@@ -148,11 +149,15 @@ def job_card(
         text += f"{status_line}\n"
         if waitlist:
             text += f"⏳ Navbatda: <b>{waitlist} kishi</b>\n"
-    fee_line = (
-        "🆓 <b>Yozilish BEPUL</b>" if job.fee <= 0
-        else f"🎫 Yozilish to'lovi: <b>{money(job.fee)}</b>"
-    )
-    text += f"\n{fee_line}\n🆔 <code>#{job.id}</code>"
+    # show_fee=False — ish beruvchi uchun. U ishchilar to'laydimi yoki
+    # yo'qmi bilishi shart emas: bu bizning tarif masalamiz, uning emas.
+    if show_fee:
+        fee_line = (
+            "🆓 <b>Yozilish BEPUL</b>" if job.fee <= 0
+            else f"🎫 Yozilish to'lovi: <b>{money(job.fee)}</b>"
+        )
+        text += f"\n{fee_line}"
+    text += f"\n🆔 <code>#{job.id}</code>"
     if secret:
         text += (
             "\n\n➖➖➖➖➖➖➖➖➖➖\n"
