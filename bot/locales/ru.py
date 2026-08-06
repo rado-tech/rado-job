@@ -121,6 +121,7 @@ def job_card(
     secret: bool = False,
     show_slots: bool = True,
     waitlist: int = 0,
+    show_fee: bool = True,
 ) -> str:
     free = max(job.slots_total - taken, 0)
     status_line = {
@@ -147,11 +148,13 @@ def job_card(
         if waitlist:
             text += f"⏳ В очереди: <b>{waitlist} чел.</b>\n"
 
-    fee_line = (
-        "🆓 <b>Запись БЕСПЛАТНО</b>" if job.fee <= 0
-        else f"🎫 Плата за запись: <b>{money(job.fee)}</b>"
-    )
-    text += f"\n{fee_line}\n🆔 <code>#{job.id}</code>"
+    if show_fee:
+        fee_line = (
+            "🆓 <b>Запись БЕСПЛАТНО</b>" if job.fee <= 0
+            else f"🎫 Плата за запись: <b>{money(job.fee)}</b>"
+        )
+        text += f"\n{fee_line}"
+    text += f"\n🆔 <code>#{job.id}</code>"
 
     if secret:
         text += (

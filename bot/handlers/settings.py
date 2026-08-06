@@ -682,24 +682,32 @@ async def mod_command(message: Message, command, session: AsyncSession, bot: Bot
 # ================================================================ zaxira
 
 async def do_backup(message: Message, session: AsyncSession) -> None:
+    """Qo'lda zaxira olish.
+
+    Nusxa ZAXIRA KANALIGA yuboriladi (ulangan bo'lsa), aks holda
+    adminlarga shaxsan. Ilgari u shunchaki tugmani bosgan odamning
+    chatiga tushardi — ya'ni avtomat zaxiradan boshqacha joyga.
+    """
     try:
-        path = await backup.create()
+        path = await backup.create_and_send(
+            message.bot,
+            session,
+            caption="💾 <b>Zaxira nusxa</b> (qo'lda olindi)",
+        )
     except Exception as e:
         log.exception("Zaxira olishda xato")
         await message.answer(f"❌ Zaxira olinmadi: {e}"[:300])
         return
+
     if path is None:
         await message.answer("ℹ️ Baza SQLite emas — zaxira uchun pg_dump ishlating.")
         return
 
+    where = store.get("backup_chat_title") or store.get("backup_chat_id")
     size_kb = path.stat().st_size / 1024
-    await message.answer_document(
-        FSInputFile(path),
-        caption=(
-            f"💾 <b>Zaxira nusxa</b>\n{path.name} · {size_kb:.0f} KB\n\n"
-            f"Bu faylni saqlab qo'ying. Tiklash uchun:\n"
-            f"<code>python restore.py {path.name}</code>"
-        ),
+    await message.answer(
+        f"✅ <b>Zaxira tayyor</b> — {path.name} · {size_kb:.0f} KB\n\n"
+        + (f"📨 Yuborildi: <b>{where}</b>" if where else "📨 Yuborildi: adminlarga")
     )
 
 

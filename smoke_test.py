@@ -754,6 +754,42 @@ async def main() -> None:
         await store.set_value(s, "backup_chat_id", "")
         check("uzilgandan keyin bo'sh", store.backup_chat() is None)
 
+        section("Foydalanuvchilar ro'yxati va qidiruv")
+        page1, total_u = await svc.list_users(s, offset=0, limit=10)
+        check("ro'yxat sahifalandi", len(page1) == 10 and total_u > 10)
+        page2, _ = await svc.list_users(s, offset=10, limit=10)
+        check("ikkinchi sahifa boshqa", {u.id for u in page1} != {u.id for u in page2})
+
+        await svc.set_blocked(s, w3, True)
+        blocked, n_blocked = await svc.list_users(s, only_blocked=True)
+        check("bloklanganlar ajratildi", n_blocked == 1 and blocked[0].id == w3.id)
+        await svc.set_blocked(s, w3, False)
+        check("blokdan chiqarildi", (await svc.list_users(s, only_blocked=True))[1] == 0)
+
+        by_id = await svc.search_users(s, str(w1.id))
+        check("ID bo'yicha topildi", len(by_id) == 1 and by_id[0].id == w1.id)
+        by_name = await svc.search_users(s, "Ishchi")
+        check("ismning qismi bo'yicha topildi", len(by_name) >= 2)
+        by_at = await svc.search_users(s, "@yoq_bunday")
+        check("topilmasa bo'sh ro'yxat", by_at == [])
+
+        section("Ish beruvchi to'lovni ko'rmaydi")
+        fee_job = Job(
+            category="yuk", title="Ish beruvchi e'loni", description="test",
+            secret_details="test", region="Chilonzor",
+            work_date=local_today() + timedelta(days=7), start_time="08:00",
+            salary=100_000, fee=15_000, slots_total=5, created_by=emp.id,
+        )
+        s.add(fee_job)
+        await s.commit()
+
+        staff_view = texts.job_card(fee_job, 0, show_fee=True)
+        owner_view = texts.job_card(fee_job, 0, show_fee=False)
+        check("xodim to'lovni ko'radi", "15 000" in staff_view)
+        check("ish beruvchi to'lovni KO'RMAYDI", "15 000" not in owner_view)
+        check("qolgan ma'lumot joyida",
+              "Ish beruvchi e'loni" in owner_view and "#" in owner_view)
+
         section("Kunlik hisobot")
         since = datetime.now(timezone.utc) - timedelta(days=1)
         rep = await svc.daily_summary(s, since)

@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.callbacks import AdminJobCB, ReportCB, WorkerCB
+from bot.callbacks import AdminJobCB, ReportCB, UserCB, UsersCB, WorkerCB
 from bot.config import settings as env
 from bot.db.models import UNLOCKED, BookingStatus, JobStatus, Role, User
 from bot.keyboards import (
@@ -28,9 +28,11 @@ from bot.keyboards import (
     job_review_kb,
     jobs_list_kb,
     report_kb,
+    user_card_kb,
+    users_list_kb,
     worker_actions_kb,
 )
-from bot.permissions import IsAdmin, IsStaff, is_admin
+from bot.permissions import IsAdmin, IsStaff, is_admin, is_owner
 from bot.services import channels, jobs as svc
 from bot.services import publisher, reports
 from bot.services import settings_store as store
@@ -343,60 +345,160 @@ async def daily_report_now(message: Message, session: AsyncSession) -> None:
 # ================================================================ foydalanuvchilar
 
 # Shaxsiy ma'lumotlar (telefon raqamlar) ham faqat adminga.
+USERS_PER_PAGE = 10
+
+
+async def show_users(
+    message: Message, state: FSMContext, session: AsyncSession,
+    *, page: int = 0, edit: bool = False
+) -> None:
+    data = await state.get_data()
+    only_blocked = bool(data.get("u_blocked"))
+
+    users, total = await svc.list_users(
+        session,
+        offset=page * USERS_PER_PAGE,
+        limit=USERS_PER_PAGE,
+        only_blocked=only_blocked,
+    )
+    if not users:
+        text = "🚫 Bloklangan foydalanuvchi yo'q." if only_blocked else "👥 Foydalanuvchi yo'q."
+    else:
+        head = "🚫 <b>Bloklanganlar</b>" if only_blocked else "👥 <b>Foydalanuvchilar</b>"
+        text = f"{head} — jami <b>{total}</b>\n\nBatafsil ko'rish uchun bosing 👇"
+
+    kb = users_list_kb(
+        users, page=page, total=total, per_page=USERS_PER_PAGE, only_blocked=only_blocked
+    )
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=kb)
+
+
 @router.message(F.text == BTN_USERS, IsAdmin())
 @router.message(Command("users"), IsAdmin())
-async def users_cmd(message: Message, state: FSMContext) -> None:
-    await state.set_state(Search.user_query)
+async def users_cmd(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await state.set_state(None)
+    await state.update_data(u_blocked=False)
+    await show_users(message, state, session, page=0)
+
+
+@router.callback_query(UsersCB.filter(), IsAdmin())
+async def users_nav(
+    call: CallbackQuery, callback_data: UsersCB, state: FSMContext, session: AsyncSession
+) -> None:
+    if callback_data.action == "search":
+        await state.set_state(Search.user_query)
+        await call.message.answer(
+            "🔎 <b>Qidirish</b>\n\n"
+            "ID, @username yoki <b>ismning bir qismini</b> yozing.\n"
+            "<i>To'liq yozish shart emas.</i>\n\n"
+            "Bekor qilish: /cancel"
+        )
+        await call.answer()
+        return
+
+    if callback_data.action in ("blocked", "all"):
+        await state.update_data(u_blocked=callback_data.action == "blocked")
+        await show_users(call.message, state, session, page=0, edit=True)
+        await call.answer()
+        return
+
+    await show_users(call.message, state, session, page=callback_data.page, edit=True)
+    await call.answer()
+
+
+async def show_user_card(message: Message, session: AsyncSession, target: User) -> None:
+    bookings = await svc.my_bookings(session, target.id, limit=5)
+    lines = "\n".join(texts.my_booking_line(b) for b in bookings) or "— hali yozilmagan"
+    role_name = {
+        Role.WORKER: "👷 Ish qidiruvchi",
+        Role.EMPLOYER: "🏢 Ish beruvchi",
+        Role.MODERATOR: "🛡 Moderator",
+        Role.ADMIN: "👑 Administrator",
+    }[target.role]
+
     await message.answer(
-        "👥 <b>Foydalanuvchi qidirish</b>\n\n"
-        "Telegram ID yoki @username yuboring.\n\n"
-        "Bekor qilish: /cancel"
+        f"{'🚫 <b>BLOKLANGAN</b>' if target.is_blocked else '✅ Faol'}\n\n"
+        f"👤 <b>{target.full_name or '—'}</b>\n"
+        f"{'@' + target.username if target.username else '—'}\n"
+        f"📱 <code>{target.phone or '—'}</code>\n"
+        f"📍 {target.region or '—'}\n"
+        f"🎭 {role_name}\n"
+        f"📊 {target.reliability}\n"
+        f"🎫 Bonus: {target.free_credits or 0} · 👥 chaqirgan: {target.invited_count or 0}\n"
+        f"🆔 <code>{target.id}</code>\n\n"
+        f"<b>So'nggi arizalar:</b>\n{lines}",
+        reply_markup=user_card_kb(target, is_owner_account=is_owner(target.id)),
     )
 
 
 @router.message(Search.user_query, F.text, IsAdmin())
 async def users_find(message: Message, state: FSMContext, session: AsyncSession) -> None:
     await state.set_state(None)
-    found = await svc.find_user(session, message.text)
-    if found is None:
-        await message.answer("❌ Topilmadi. ID yoki @username to'g'ri ekaniga ishonch hosil qiling.")
+    found = await svc.search_users(session, message.text)
+
+    if not found:
+        await message.answer("❌ Topilmadi. Boshqa so'z bilan urinib ko'ring.")
+        return
+    if len(found) == 1:
+        await show_user_card(message, session, found[0])
         return
 
-    bookings = await svc.my_bookings(session, found.id, limit=5)
-    lines = "\n".join(texts.my_booking_line(b) for b in bookings) or "— hali yozilmagan"
     await message.answer(
-        f"👤 <b>{found.full_name}</b>\n"
-        f"{'@' + found.username if found.username else '—'}\n"
-        f"📱 <code>{found.phone or '—'}</code>\n"
-        f"📍 {found.region or '—'} · {found.role.value}\n"
-        f"📊 {found.reliability}\n"
-        f"{'🚫 BLOKLANGAN' if found.is_blocked else '✅ Faol'}\n"
-        f"🆔 <code>{found.id}</code>\n\n"
-        f"<b>So'nggi arizalar:</b>\n{lines}\n\n"
-        f"Bloklash/ochish: /block {found.id}"
+        f"🔎 <b>Topildi: {len(found)} ta</b>",
+        reply_markup=users_list_kb(
+            found, page=0, total=len(found), per_page=USERS_PER_PAGE, only_blocked=False
+        ),
     )
 
 
-@router.message(Command("block"), IsAdmin())
-async def block_user(message: Message, command, session: AsyncSession) -> None:  # noqa: ANN001
-    arg = (command.args or "").strip()
-    if not arg.isdigit():
-        await message.answer("Ishlatilishi: <code>/block 123456789</code>")
-        return
-    target = await session.get(User, int(arg))
+@router.callback_query(UserCB.filter(), IsAdmin())
+async def user_action(
+    call: CallbackQuery, callback_data: UserCB, session: AsyncSession, bot: Bot
+) -> None:
+    target = await session.get(User, callback_data.user_id)
     if target is None:
-        await message.answer("❌ Foydalanuvchi topilmadi.")
-        return
-    if target.id in env.admins:
-        await message.answer("❗️ Administratorni bloklab bo'lmaydi.")
+        await call.answer("Topilmadi", show_alert=True)
         return
 
-    target.is_blocked = not target.is_blocked
-    await session.commit()
-    await message.answer(
-        f"{'🚫 Bloklandi' if target.is_blocked else '✅ Blok olib tashlandi'}: "
-        f"{target.mention}"
-    )
+    action = callback_data.action
+    if action != "view" and is_owner(target.id):
+        await call.answer("Asosiy adminga tegib bo'lmaydi.", show_alert=True)
+        return
+
+    if action == "block":
+        await svc.set_blocked(session, target, True)
+        await call.answer("🚫 Bloklandi")
+    elif action == "unblock":
+        await svc.set_blocked(session, target, False)
+        await call.answer("✅ Blokdan chiqarildi")
+        try:
+            await bot.send_message(target.id, "✅ Hisobingiz qayta faollashtirildi.")
+        except Exception:
+            pass
+    elif action in ("mod", "unmod"):
+        target.role = Role.MODERATOR if action == "mod" else Role.WORKER
+        await session.commit()
+        await call.answer("🛡 Moderator" if action == "mod" else "🗑 Moderator emas")
+        try:
+            await bot.send_message(
+                target.id,
+                "🛡 <b>Sizga moderator huquqi berildi.</b>\n\n/start bosib menyuni yangilang."
+                if action == "mod"
+                else "ℹ️ Moderator huquqingiz olib tashlandi.",
+            )
+        except Exception:
+            pass
+    else:
+        await call.answer()
+
+    await session.refresh(target)
+    await show_user_card(call.message, session, target)
 
 
 @router.callback_query(WorkerCB.filter())
