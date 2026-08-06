@@ -43,6 +43,8 @@ from bot.config import (
     QUICK_SLOTS,
     QUICK_TIMES,
     REGIONS,
+    category_items,
+    category_name,
 )
 from bot.db.models import Channel, Job, JobStatus, Role, User
 from bot.permissions import is_admin, is_staff
@@ -163,7 +165,7 @@ def admin_menu(user: User | None = None) -> ReplyKeyboardMarkup:
 
 def skip_kb(field: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="⏭ O'tkazib yuborish", callback_data=PickCB(field=field, value="__skip__").pack())
+    kb.button(text=texts.BTN_SKIP, callback_data=PickCB(field=field, value="__skip__").pack())
     return kb.as_markup()
 
 
@@ -190,8 +192,11 @@ def regions_kb(field: str, *, with_all: bool = False) -> InlineKeyboardMarkup:
 def categories_kb(field: str, *, with_all: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if with_all:
-        kb.button(text="🌐 Barchasi", callback_data=PickCB(field=field, value="*").pack())
-    for key, name in CATEGORIES:
+        kb.button(
+            text=texts.BTN_ALL_CATEGORIES,
+            callback_data=PickCB(field=field, value="*").pack(),
+        )
+    for key, name in category_items():
         kb.button(text=name, callback_data=PickCB(field=field, value=key).pack())
     kb.adjust(2)
     return kb.as_markup()
@@ -200,13 +205,13 @@ def categories_kb(field: str, *, with_all: bool = False) -> InlineKeyboardMarkup
 def categories_multi_kb(selected: list[str]) -> InlineKeyboardMarkup:
     """Ko'p tanlovli obuna: bosilgani ✅ bilan belgilanadi."""
     kb = InlineKeyboardBuilder()
-    for key, name in CATEGORIES:
+    for key, name in category_items():
         mark = "✅ " if key in selected else "▫️ "
         kb.button(text=mark + name, callback_data=PickCB(field="cat", value=key).pack())
     kb.adjust(2)
     kb.row(
         InlineKeyboardButton(
-            text="✔️ Tayyor", callback_data=PickCB(field="cat", value="__done__").pack()
+            text=texts.BTN_DONE, callback_data=PickCB(field="cat", value="__done__").pack()
         )
     )
     return kb.as_markup()
@@ -438,38 +443,39 @@ def dates_kb(field: str = "date") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-EDIT_FIELDS = [
-    ("category", "🧰 Tur"),
-    ("title", "📝 Nom"),
-    ("description", "📄 Tavsif"),
-    ("secret", "🔒 Maxfiy"),
-    ("region", "📍 Hudud"),
-    ("work_date", "📅 Sana"),
-    ("start_time", "🕗 Vaqt"),
-    ("salary", "💰 Haq"),
-    ("slots", "👥 Kishi"),
-    ("fee", "🎫 To'lov"),
+EDIT_FIELD_KEYS = [
+    "category", "title", "description", "secret",
+    "region", "work_date", "start_time", "salary", "slots", "fee",
 ]
+
+
+def edit_fields() -> list[tuple[str, str]]:
+    """Tahrirlash tugmalari — joriy tildagi qisqa nomlar bilan."""
+    return [(key, texts.FIELD_SHORT[key]) for key in EDIT_FIELD_KEYS]
+
+
+# Eski nom — kod ichidagi havolalar uchun.
+EDIT_FIELDS = [(k, k) for k in EDIT_FIELD_KEYS]
 
 
 def preview_kb(*, is_admin: bool) -> InlineKeyboardMarkup:
     """Oldindan ko'rish: har maydonni alohida tuzatish mumkin.
 
     Avval bitta xatoda butun jarayonni qaytadan boshlash kerak edi —
-    8 qadam. Endi faqat o'sha maydonga qaytiladi.
+    10 qadam. Endi faqat o'sha maydonga qaytiladi.
     """
     kb = InlineKeyboardBuilder()
     kb.button(
-        text="✅ E'lon qilish" if is_admin else "📨 Tasdiqqa yuborish",
+        text=texts.BTN_PUBLISH if is_admin else texts.BTN_SEND_REVIEW,
         callback_data=PickCB(field="confirm", value="yes").pack(),
     )
     kb.adjust(1)
-    for field, label in EDIT_FIELDS:
+    for field, label in edit_fields():
         kb.button(text=f"✏️ {label}", callback_data=EditCB(field=field).pack())
     kb.adjust(1, 3, 3, 3, 1)
     kb.row(
         InlineKeyboardButton(
-            text="🚫 Bekor qilish", callback_data=PickCB(field="confirm", value="no").pack()
+            text=texts.BTN_CANCEL, callback_data=PickCB(field="confirm", value="no").pack()
         )
     )
     return kb.as_markup()
@@ -569,14 +575,20 @@ def admin_job_kb(job: Job, *, owner_view: bool = False) -> InlineKeyboardMarkup:
 def edit_job_kb(job_id: int) -> InlineKeyboardMarkup:
     """Joylangan e'lonning qaysi maydonini tahrirlash."""
     kb = InlineKeyboardBuilder()
-    for field, label in EDIT_FIELDS:
+    for field, label in edit_fields():
         if field == "fee":
             continue  # narx alohida tugma orqali o'zgaradi
         kb.button(text=label, callback_data=JobEditCB(field=field, job_id=job_id).pack())
+    # Lokatsiya EDIT_FIELD_KEYS da yo'q, lekin tahrirlash mumkin bo'lishi kerak.
+    kb.button(
+        text=texts.FIELD_SHORT["location"],
+        callback_data=JobEditCB(field="location", job_id=job_id).pack(),
+    )
     kb.adjust(3)
     kb.row(
         InlineKeyboardButton(
-            text="⬅️ Orqaga", callback_data=AdminJobCB(action="view", job_id=job_id).pack()
+            text=texts.BTN_BACK_SHORT,
+            callback_data=AdminJobCB(action="view", job_id=job_id).pack(),
         )
     )
     return kb.as_markup()

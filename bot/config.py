@@ -125,9 +125,34 @@ CATEGORIES: list[tuple[str, str]] = [
 
 CATEGORY_NAMES: dict[str, str] = dict(CATEGORIES)
 
+CATEGORY_NAMES_RU: dict[str, str] = {
+    "yuk": "📦 Погрузка / разгрузка",
+    "qurilish": "🧱 Стройка / ремонт",
+    "tozalash": "🧹 Уборка",
+    "ombor": "🏭 Склад / завод",
+    "oshxona": "🍽 Кухня / официант",
+    "savdo": "🛒 Продавец / промоутер",
+    "dala": "🌾 Поле / сад",
+    "kochirish": "🚚 Переезд",
+    "boshqa": "🔧 Другое",
+}
+
 
 def category_name(key: str | None) -> str:
-    return CATEGORY_NAMES.get(key or "", "🔧 Boshqa")
+    """Kasb nomi — foydalanuvchi tilida.
+
+    Kalit bazada o'zgarmas qoladi ("yuk"), faqat ko'rinishi tarjima
+    qilinadi. Shu tufayli til almashtirilganda eski e'lonlar buzilmaydi.
+    """
+    from bot.i18n import is_ru  # aylanma importdan qochish uchun shu yerda
+
+    table = CATEGORY_NAMES_RU if is_ru() else CATEGORY_NAMES
+    return table.get(key or "", table.get("boshqa", "🔧 Boshqa"))
+
+
+def category_items() -> list[tuple[str, str]]:
+    """Tugmalar uchun (kalit, nom) juftliklari — joriy tilda."""
+    return [(key, category_name(key)) for key, _ in CATEGORIES]
 
 
 # Tez tanlash uchun tayyor qiymatlar — admin raqam terib o'tirmaydi.
