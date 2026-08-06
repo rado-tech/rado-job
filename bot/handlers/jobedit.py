@@ -28,6 +28,7 @@ from bot.keyboards import (
     categories_kb,
     dates_kb,
     edit_job_kb,
+    job_review_kb,
     regions_kb,
     salaries_kb,
     skip_kb,
@@ -277,10 +278,26 @@ async def _apply(
         if sent:
             await message.answer(f"📨 {sent} ta ishchiga o'zgarish haqida xabar berildi.")
 
+    # E'lon muallifiga xabar — u nima o'zgarganini bilishi kerak, aks holda
+    # keyingi safar yana xuddi shunday yozadi.
+    if job.created_by != user.id:
+        try:
+            await bot.send_message(
+                job.created_by,
+                texts.job_edited_by_staff(job, FIELD_LABEL[field], new),
+            )
+        except Exception as e:
+            log.debug("Muallifga tahrir xabari yetmadi: %s", e)
+
     taken = await svc.taken_count(session, job.id)
-    await message.answer(
-        texts.job_card(job, taken, secret=True), reply_markup=admin_job_kb(job)
+    # Tasdiq kutayotgan e'lon bo'lsa — tugmalarni SHU YERDA qaytaramiz,
+    # moderator qayta qidirib yurmasin.
+    kb = (
+        job_review_kb(job.id)
+        if job.status == JobStatus.PENDING_REVIEW
+        else admin_job_kb(job)
     )
+    await message.answer(texts.job_card(job, taken, secret=True), reply_markup=kb)
 
 
 async def _notify_workers(

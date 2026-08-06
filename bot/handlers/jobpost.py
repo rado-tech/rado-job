@@ -430,11 +430,17 @@ async def send_preview(message: Message, state: FSMContext, user: User) -> None:
     staff = is_staff(user)
 
     await state.set_state(NewJob.preview)
+    # Sarlavhalar «to'lov» atamasisiz: e'lon bepul ham bo'lishi mumkin, va
+    # ish beruvchiga to'lov masalasi umuman aloqador emas — u faqat ishchi
+    # oladi. Bo'linish MAZMUN bo'yicha: e'londa ko'rinadigan va faqat
+    # yozilganlarga ochiladigan qism.
     await message.answer(
-        "👀 <b>Hamma ko'radigan qism:</b>\n\n"
+        "👀 <b>E'londa ko'rinadi:</b>\n\n"
         + texts.job_card(preview, 0, show_fee=staff)
     )
-    secret_block = "🔒 <b>Faqat to'lov qilganlar ko'radi:</b>\n\n" + data["secret"]
+    secret_block = (
+        "🔒 <b>Faqat ishga yozilganlarga ko'rinadi:</b>\n\n" + data["secret"]
+    )
     if data.get("lat") is not None:
         secret_block += "\n\n🗺 Lokatsiya biriktirilgan ✅"
     else:

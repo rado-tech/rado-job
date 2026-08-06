@@ -519,10 +519,18 @@ def undo_kb(booking_id: int) -> InlineKeyboardMarkup:
 
 
 def job_review_kb(job_id: int) -> InlineKeyboardMarkup:
+    """Tasdiq kartochkasi.
+
+    «Tahrirlash» ham shu yerda: ma'lumot aralash bo'lsa (manzil tavsifga
+    tushib qolgan, telefon noto'g'ri) moderator uni RAD ETMASDAN tuzatib
+    yuborishi kerak. Ilgari buning uchun boshqa bo'limdan e'lonni qidirib
+    topish kerak edi va moderator buni bilmasligi mumkin edi.
+    """
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Tasdiqlash", callback_data=JobModCB(action="ok", job_id=job_id).pack())
     kb.button(text="❌ Rad etish", callback_data=JobModCB(action="no", job_id=job_id).pack())
-    kb.adjust(2)
+    kb.button(text="✏️ Tahrirlash", callback_data=AdminJobCB(action="edit", job_id=job_id).pack())
+    kb.adjust(2, 1)
     return kb.as_markup()
 
 
