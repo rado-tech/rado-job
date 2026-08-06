@@ -431,38 +431,38 @@ def my_booking_line(b: Booking) -> str:
 
 # ================================================================ e'lon yaratish
 
-NEW_JOB_CATEGORY = "📝 <b>1/8 · Ish turi</b>\n\nQaysi sohaga tegishli?"
+NEW_JOB_CATEGORY = "📝 <b>1/10 · Ish turi</b>\n\nQaysi sohaga tegishli?"
 NEW_JOB_TITLE = (
-    "📝 <b>2/8 · Ish nomi</b>\n\n"
+    "📝 <b>2/10 · Ish nomi</b>\n\n"
     "Qisqa va aniq yozing.\n"
     "<i>Masalan: Omborga yuk tashish</i>"
 )
 NEW_JOB_DESC = (
-    "📝 <b>3/8 · Tavsif</b> — buni <b>hamma ko'radi</b>.\n\n"
+    "📝 <b>3/10 · Tavsif</b> — buni <b>e'londa hamma ko'radi</b>.\n\n"
     "Nima ish qilinadi, qanday talab bor.\n"
     "❗️ Manzil va telefonni bu yerga YOZMANG — u keyingi qadamda.\n\n"
     "<i>Masalan: Qurilish materiallarini mashinadan tushirish. 8 soat. "
     "Jismonan baquvvat erkaklar kerak. Tushlik beriladi.</i>"
 )
 NEW_JOB_SECRET = (
-    "🔒 <b>4/8 · Maxfiy ma'lumot</b> — faqat <b>to'lov qilganlar</b> ko'radi.\n\n"
+    "🔒 <b>4/10 · Yopiq ma'lumot</b> — faqat <b>ishga yozilganlar</b> ko'radi.\n\n"
     "Aniq manzil, mo'ljal, mas'ul odam va uning telefoni.\n\n"
     "<i>Masalan: Chilonzor 19-kvartal, «Metro» ombori, 3-darvoza. "
     "Mas'ul: Aziz aka, +998 90 123 45 67. Soat 07:45 da darvoza oldida.</i>"
 )
 NEW_JOB_LOCATION = (
-    "🗺 <b>Lokatsiya</b> (ixtiyoriy) — buni ham <b>faqat to'lov qilganlar</b> "
-    "ko'radi.\n\n"
+    "🗺 <b>5/10 · Lokatsiya</b> (ixtiyoriy) — buni ham faqat "
+    "<b>ishga yozilganlar</b> ko'radi.\n\n"
     "Xaritadagi aniq nuqtani yuboring: 📎 → <b>Location</b> → xaritada joyni "
     "tanlang → yuboring.\n\n"
     "Ishchi uni bosib «Marshrut» ola oladi — manzil matnidan ancha foydali, "
     "ayniqsa mo'ljal tushunarsiz bo'lsa."
 )
-NEW_JOB_REGION = "📍 <b>5/8 · Hudud</b>"
-NEW_JOB_DATE = "📅 <b>6/8 · Sana</b>\n\nTugmani bosing yoki yozing: <code>05.08.2026</code>"
-NEW_JOB_TIME = "🕗 <b>7/8 · Boshlanish vaqti</b>\n\nTugmani bosing yoki yozing: <code>08:00</code>"
-NEW_JOB_SALARY = "💰 <b>8/8 · Ishchi oladigan haq</b>\n\nTugmani bosing yoki raqam yozing."
-NEW_JOB_SLOTS = "👥 <b>Necha kishi kerak?</b>"
+NEW_JOB_REGION = "📍 <b>6/10 · Hudud</b>"
+NEW_JOB_DATE = "📅 <b>7/10 · Sana</b>\n\nTugmani bosing yoki yozing: <code>05.08.2026</code>"
+NEW_JOB_TIME = "🕗 <b>8/10 · Boshlanish vaqti</b>\n\nTugmani bosing yoki yozing: <code>08:00</code>"
+NEW_JOB_SALARY = "💰 <b>9/10 · Ishchi oladigan haq</b>\n\nTugmani bosing yoki raqam yozing."
+NEW_JOB_SLOTS = "👥 <b>10/10 · Necha kishi kerak?</b>"
 NEW_JOB_FEE = "🎫 <b>Yozilish to'lovi</b>"
 
 NEW_JOB_PUBLISHED = "✅ E'lon joylandi!"
@@ -547,6 +547,18 @@ def undo_after_reject(job: Job) -> str:
         f"↩️ <b>«{job.title}»</b> bo'yicha rad etish bekor qilindi.\n\n"
         f"Arizangiz yana tekshiruvga tushdi — bu xato bo'lgan ekan. "
         f"Natijasi haqida xabar beramiz."
+    )
+
+
+def job_edited_by_staff(job: Job, field_label: str, new_value: str) -> str:
+    return (
+        f"✏️ <b>E'loningiz tahrirlandi</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)}\n\n"
+        f"Administrator <b>{field_label}</b> maydonini o'zgartirdi:\n"
+        f"{new_value}\n\n"
+        f"<i>Keyingi e'lonlarda shu ko'rinishda yozsangiz, tasdiqlash "
+        f"tezroq bo'ladi.</i>"
     )
 
 

@@ -245,6 +245,29 @@ check("hudud va kasb ko'rinadi", "Chilonzor" in cap_plain and "Yuk tashish" in c
 check("tayyor sabablar bor", len(kb.REJECT_REASONS) >= 4)
 
 
+print("\n── E'lon yaratish qadamlari")
+
+from bot.handlers.jobpost import ORDER, PROMPTS  # noqa: E402
+
+steps = [f for f in ORDER if f != "fee"]  # to'lov ish beruvchidan so'ralmaydi
+check("10 ta qadam", len(steps) == 10, str(len(steps)))
+
+wrong = []
+for i, field in enumerate(steps, 1):
+    prompt = PROMPTS[field][0]
+    if f"{i}/10" not in prompt:
+        wrong.append(f"{field}: {i}/10 kutilgan")
+check("raqamlar ketma-ket va to'g'ri", not wrong, "; ".join(wrong))
+
+# «To'lov» atamasi ish beruvchi ko'radigan matnlarda bo'lmasligi kerak:
+# e'lon bepul ham bo'lishi mumkin, va to'lov ish beruvchiga aloqador emas.
+bad_words = []
+for field in ("description", "secret", "location"):
+    if "to'lov qilganlar" in PROMPTS[field][0]:
+        bad_words.append(field)
+check("«to'lov qilganlar» iborasi olib tashlandi", not bad_words, str(bad_words))
+
+
 print("\n── Ko'p tillilik")
 
 from bot.i18n import LANGS, current_lang, set_lang  # noqa: E402
