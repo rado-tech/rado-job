@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 
 from bot.config import category_name
-from bot.db.models import Booking, BookingStatus, Job, JobStatus
+from bot.db.models import Booking, BookingStatus, Job, JobStatus, User
 from bot.utils import local_today
 
 WEEKDAYS = [
@@ -604,4 +604,98 @@ def job_message(job: Job, text: str) -> str:
         f"💼 {job.title}\n"
         f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
         f"{text}"
+    )
+
+
+# ---------------------------------------------------------------- inline кнопки
+
+BTN_CANCEL_BOOKING = "🚫 Отменить"
+BTN_COMPLAIN = "🆘 Жалоба"
+BTN_APPLY_FREE = "🆓 Записаться бесплатно"
+BTN_APPLY = "✅ Записаться"
+BTN_WAITLIST = "⏳ В очередь (бесплатно)"
+BTN_TO_LIST = "⬅️ К списку"
+BTN_CANCEL_YES = "✅ Да, всё равно отменяю"
+BTN_CANCEL_NO = "⬅️ Нет, оставляю"
+BTN_ATT_YES = "✅ Да, вышел"
+BTN_ATT_NO = "❌ Нет"
+BTN_MARK_DONE = "✅ Вышел на работу"
+BTN_MARK_NOSHOW = "🚷 Не вышел"
+BTN_MARK_BLOCK = "🚫 Заблокировать"
+ALL_LABEL = "Все"
+ALL_DAYS_LABEL = "Все дни"
+BTN_CLEAR_FILTER = "♻️ Сбросить фильтры"
+
+
+def btn_credit(n: int) -> str:
+    return f"🎁 Бесплатно за бонус ({n} шт.)"
+
+
+# ---------------------------------------------------------------- оценка
+
+RATE_EMPLOYER_ASK = (
+    "⭐ <b>Оцените работодателя</b>\n\n"
+    "Поставьте оценку от 1 до 5. Оценку видит только администрация — "
+    "она используется для контроля качества."
+)
+RATE_WORKER_ASK = (
+    "⭐ <b>Оцените работника</b>\n\n"
+    "От 1 до 5. Оценку видит только администрация."
+)
+RATE_THANKS = "✅ Спасибо! Оценка принята."
+RATE_SKIPPED = "Без оценки."
+
+
+# ---------------------------------------------------------------- уведомления
+
+NOSHOW_MARKED = (
+    "🚷 Отмечено, что вы не вышли на работу, на которую записались.\n\n"
+    "Это видно в вашем профиле. Если это ошибка — напишите администратору."
+)
+ACCOUNT_UNBLOCKED = "✅ Ваш аккаунт снова активен."
+NEW_JOB_BROADCAST_HEADER = "🆕 <b>Новая вакансия!</b>"
+
+
+def job_approved(job: Job) -> str:
+    return f"✅ Ваше объявление <b>«{job.title}»</b> одобрено и опубликовано!"
+
+
+def job_declined(job: Job, reason: str | None) -> str:
+    text = f"❌ Ваше объявление <b>«{job.title}»</b> отклонено."
+    if reason:
+        text += f"\n\nПричина: <i>{reason}</i>"
+    return text
+
+
+def job_cancelled_note(job: Job, reason: str | None) -> str:
+    text = (
+        "❌ <b>РАБОТА ОТМЕНЕНА</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+    )
+    if reason:
+        text += f"Причина: <i>{reason}</i>\n\n"
+    text += "❗️ <b>Не выходите на эту работу.</b> Приносим извинения за неудобства."
+    if job.fee > 0:
+        text += "\n\nЕсли вы уже оплатили — напишите через /shikoyat, деньги вернут."
+    return text
+
+
+def new_worker_note(job: Job, worker: User, taken: int) -> str:
+    return (
+        "👤 <b>Записался новый работник</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+        f"<b>{worker.full_name}</b>\n"
+        f"📱 <code>{worker.phone or '—'}</code>\n"
+        f"📊 {worker.reliability}\n\n"
+        f"👥 Всего: <b>{taken}/{job.slots_total}</b>"
+    )
+
+
+def attendance_author_intro(job: Job) -> str:
+    return (
+        f"📋 <b>Работа «{job.title}» завершена.</b>\n\n"
+        "Отметьте, кто вышел, а кто нет. "
+        "Это записывается в показатель надёжности работников."
     )

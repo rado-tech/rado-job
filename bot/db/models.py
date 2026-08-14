@@ -384,6 +384,68 @@ class Channel(Base):
         return True
 
 
+class FsmState(Base):
+    """aiogram FSM holati — bazada.
+
+    Ilgari MemoryStorage ishlatilardi: bot qayta ishga tushganda (deploy,
+    xato, server restarti) yarim to'ldirilgan formalar — e'lon yaratish,
+    telefon kiritish, reklama tayyorlash — yo'qolardi va odam boshidan
+    boshlashga majbur edi. Endi holat diskda: restart sezilmaydi.
+    """
+
+    __tablename__ = "fsm_states"
+
+    # "bot_id:chat_id:user_id:destiny" — aiogram StorageKey dan yasaladi.
+    key: Mapped[str] = mapped_column(String(96), primary_key=True)
+    state: Mapped[str | None] = mapped_column(String(128))
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    # Eski qoldiqlarni tozalash uchun (72 soatdan keyin forma baribir o'lik).
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=utcnow, onupdate=utcnow, index=True
+    )
+
+
+class Rating(Base):
+    """Ish yakunidagi o'zaro baho (1-5): ishchi ⭐ ish beruvchi.
+
+    Natijani FAQAT admin/moderator ko'radi — ishchi va ish beruvchiga
+    ko'rsatilmaydi. Maqsad: kim bilan ishlash xavfli ekanini administratsiya
+    erta bilsin (past baho — tekshirish signali).
+    """
+
+    __tablename__ = "ratings"
+    __table_args__ = (
+        # Bir ish bo'yicha bir juftlik faqat bitta baho. Qayta bosilsa
+        # eskisi yangilanadi — "5 ta yulduz spam" bo'lmaydi.
+        UniqueConstraint("job_id", "rater_id", "target_id", name="uq_rating_once"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    rater_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    target_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    stars: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class StaffAction(Base):
+    """Moderator/admin harakatlari jurnali.
+
+    Bir nechta moderator ishlaganda «kim tasdiqladi, kim rad etdi, kim
+    blokladi» degan savol albatta chiqadi. Jurnal — javob va intizom:
+    har harakat kimniki ekani yozilib boradi.
+    """
+
+    __tablename__ = "staff_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    action: Mapped[str] = mapped_column(String(32))
+    target: Mapped[str] = mapped_column(String(64), default="")
+    details: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+
+
 class JobPost(Base):
     """Bitta e'lonning bitta kanaldagi posti.
 

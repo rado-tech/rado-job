@@ -35,8 +35,9 @@ from bot.keyboards import (
     slots_kb,
     times_kb,
 )
+from bot.i18n import use_lang
 from bot.permissions import is_staff
-from bot.services import jobs as svc
+from bot.services import audit, jobs as svc
 from bot.services import notifier, publisher
 from bot.states import EditJob
 from bot.utils import clean, local_today, parse_date, parse_int, parse_time
@@ -268,14 +269,19 @@ async def _apply(
         if sent:
             await message.answer(f"📨 {sent} ta ishchiga o'zgarish haqida xabar berildi.")
 
+    if is_staff(user):
+        await audit.log_action(
+            session, user.id, "job_edit", f"e'lon #{job.id}", field_label(field)
+        )
+
     # E'lon muallifiga xabar — u nima o'zgarganini bilishi kerak, aks holda
-    # keyingi safar yana xuddi shunday yozadi.
+    # keyingi safar yana xuddi shunday yozadi. Xabar MUALLIFNING tilida.
     if job.created_by != user.id:
+        author = await session.get(User, job.created_by)
         try:
-            await bot.send_message(
-                job.created_by,
-                texts.job_edited_by_staff(job, field_label(field), new),
-            )
+            with use_lang(author.lang if author else None):
+                note = texts.job_edited_by_staff(job, field_label(field), new)
+            await bot.send_message(job.created_by, note)
         except Exception as e:
             log.debug("Muallifga tahrir xabari yetmadi: %s", e)
 
@@ -426,3 +432,7 @@ async def cancel_do(
         f"❌ <b>E'lon bekor qilindi.</b>\n\n"
         f"📨 {sent} ta ishchiga xabar berildi."
     )
+    if is_staff(user):
+        await audit.log_action(
+            session, user.id, "job_cancel", f"e'lon #{job.id}", reason or ""
+        )

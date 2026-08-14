@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.db.models import BookingStatus
+from bot.db.models import BookingStatus, User
+from bot.i18n import use_lang
 from bot.services import broadcast, jobs as svc
 from bot.services import publisher
 from bot.services import settings_store as store
@@ -24,15 +26,25 @@ log = logging.getLogger(__name__)
 
 MAX_PROMOTE_ATTEMPTS = 5
 
+# MUHIM: bu fayldagi funksiyalar fon vazifalaridan ham chaqiriladi, u yerda
+# middleware til o'rnatmaydi. Shuning uchun har xabar QABUL QILUVCHINING
+# tilida render qilinadi — use_lang(user.lang) bilan. Busiz ruscha tanlagan
+# odamga o'zbekcha eslatma borardi.
 
-async def send_secret(bot: Bot, chat_id: int, job) -> None:  # noqa: ANN001
+
+async def send_secret(bot: Bot, chat_id: int, job, lang: str | None = None) -> None:  # noqa: ANN001
     """To'lovi tasdiqlangan ishchiga maxfiy ma'lumot + xarita nuqtasi.
 
     Lokatsiya alohida xabar bo'lib ketadi — Telegram uni xaritada
     ko'rsatadi va «Marshrut» tugmasini beradi. Matn ichidagi manzildan
     ancha foydali, ayniqsa mo'ljal tushunarsiz bo'lganda.
+
+    lang berilsa matn o'sha tilda ketadi (fon vazifalarida joriy til
+    qabul qiluvchiniki emas).
     """
-    await bot.send_message(chat_id, texts.booking_confirmed(job))
+    with use_lang(lang) if lang else nullcontext():
+        text = texts.booking_confirmed(job)
+    await bot.send_message(chat_id, text)
     if job.lat is not None and job.lon is not None:
         try:
             await bot.send_location(chat_id, latitude=job.lat, longitude=job.lon)
@@ -51,23 +63,26 @@ async def promote_and_notify(bot: Bot, session: AsyncSession, job_id: int) -> bo
         if booking is None:
             return False
 
+        # Xabar navbatdagi ODAMNING tilida ketishi kerak.
+        recipient = await session.get(User, booking.user_id)
+        lang = recipient.lang if recipient else None
+
         try:
             if booking.job.fee <= 0:
                 # Bepul e'lon: to'lov kutilmaydi, tafsilotlar darhol beriladi.
-                await bot.send_message(
-                    booking.user_id, texts.waitlist_promoted_free(booking.job)
-                )
-                await send_secret(bot, booking.user_id, booking.job)
+                with use_lang(lang):
+                    note = texts.waitlist_promoted_free(booking.job)
+                await bot.send_message(booking.user_id, note)
+                await send_secret(bot, booking.user_id, booking.job, lang=lang)
             else:
-                await bot.send_message(
-                    booking.user_id,
-                    texts.waitlist_promoted(
+                with use_lang(lang):
+                    note = texts.waitlist_promoted(
                         booking.job,
                         store.waitlist_minutes(),
                         store.card_number(),
                         store.card_holder(),
-                    ),
-                )
+                    )
+                await bot.send_message(booking.user_id, note)
         except TelegramForbiddenError:
             # Odam botni bloklagan — uni o'tkazib yuboramiz.
             await svc.deactivate(session, booking.user_id)
@@ -98,9 +113,10 @@ async def reward_referrer_if_first(bot: Bot, session: AsyncSession, user_id: int
     friend = await session.get(svc.User, user_id)
     name = friend.full_name if friend else "Do'stingiz"
     try:
-        await bot.send_message(
-            inviter.id, texts.referral_rewarded(name, reward, inviter.free_credits)
-        )
+        # Chaqiruvchining o'z tilida.
+        with use_lang(inviter.lang):
+            note = texts.referral_rewarded(name, reward, inviter.free_credits)
+        await bot.send_message(inviter.id, note)
     except Exception as e:
         log.debug("Referal xabari yetmadi (%s): %s", inviter.id, e)
 
@@ -115,17 +131,12 @@ async def notify_author_new_worker(bot: Bot, session: AsyncSession, booking) -> 
     if job is None or job.created_by == booking.user_id:
         return
     taken = await svc.taken_count(session, job.id)
+    author = await session.get(User, job.created_by)
     try:
-        await bot.send_message(
-            job.created_by,
-            f"👤 <b>Yangi ishchi yozildi</b>\n\n"
-            f"💼 {job.title}\n"
-            f"📅 {texts.fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
-            f"<b>{booking.user.full_name}</b>\n"
-            f"📱 <code>{booking.user.phone or '—'}</code>\n"
-            f"📊 {booking.user.reliability}\n\n"
-            f"👥 Jami: <b>{taken}/{job.slots_total}</b>",
-        )
+        # Ish beruvchining O'Z tilida — u ruschani tanlagan bo'lishi mumkin.
+        with use_lang(author.lang if author else None):
+            note = texts.new_worker_note(job, booking.user, taken)
+        await bot.send_message(job.created_by, note)
     except Exception as e:
         log.debug("Muallifga xabar bormadi (%s): %s", job.created_by, e)
 
@@ -143,20 +154,12 @@ async def cancel_job(bot: Bot, session: AsyncSession, job, reason: str | None = 
     await session.commit()
 
     bookings = await svc.job_workers(session, job.id)
-    text = (
-        f"❌ <b>ISH BEKOR QILINDI</b>\n\n"
-        f"💼 {job.title}\n"
-        f"📅 {texts.fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
-    )
-    if reason:
-        text += f"Sabab: <i>{reason}</i>\n\n"
-    text += "❗️ <b>Ishga bormang.</b> Noqulaylik uchun uzr so'raymiz."
-    if job.fee > 0:
-        text += "\n\nTo'lov qilgan bo'lsangiz /shikoyat orqali yozing — qaytariladi."
-
     sent = 0
     for b in bookings:
         try:
+            # Har kimga o'z tilida — matn qabul qiluvchi bo'yicha yasaladi.
+            with use_lang(b.user.lang if b.user else None):
+                text = texts.job_cancelled_note(job, reason)
             await bot.send_message(b.user_id, text)
             sent += 1
         except Exception:
@@ -173,11 +176,13 @@ async def send_reminders(bot: Bot, session: AsyncSession, kind: str) -> int:
     sent = []
     for b in bookings:
         try:
-            if kind == "evening":
-                text = texts.remind_evening(b.job)
-            else:
-                minutes = int((b.job.starts_at - svc.utcnow()).total_seconds() // 60)
-                text = texts.remind_soon(b.job, max(minutes, 1))
+            recipient = await session.get(User, b.user_id)
+            with use_lang(recipient.lang if recipient else None):
+                if kind == "evening":
+                    text = texts.remind_evening(b.job)
+                else:
+                    minutes = int((b.job.starts_at - svc.utcnow()).total_seconds() // 60)
+                    text = texts.remind_soon(b.job, max(minutes, 1))
             await bot.send_message(b.user_id, text)
             if b.job.lat is not None and b.job.lon is not None:
                 await bot.send_location(b.user_id, latitude=b.job.lat, longitude=b.job.lon)
@@ -210,9 +215,11 @@ async def ask_attendance(bot: Bot, session: AsyncSession) -> int:
 
         for b in bookings:
             try:
-                await bot.send_message(
-                    b.user_id, texts.ask_attendance(job), reply_markup=attendance_kb(b.id)
-                )
+                # Har ishchiga o'z tilida (matn ham, tugmalar ham).
+                with use_lang(b.user.lang if b.user else None):
+                    text = texts.ask_attendance(job)
+                    kb = attendance_kb(b.id)
+                await bot.send_message(b.user_id, text, reply_markup=kb)
                 asked += 1
             except Exception as e:
                 log.debug("Davomat so'rovi yetmadi (%s): %s", b.user_id, e)
@@ -220,20 +227,26 @@ async def ask_attendance(bot: Bot, session: AsyncSession) -> int:
             await asyncio.sleep(0.05)
 
         # Ish muallifiga ro'yxat — u tasdiqlaydi yoki to'g'rilaydi.
+        # Muallif xodim bo'lmasa bloklash tugmasini ko'rsatmaymiz — u
+        # baribir ishlamaydi (faqat admin bloklaydi).
         if bookings:
+            from bot.permissions import is_staff
+
+            author = await session.get(User, job.created_by)
+            author_is_staff = author is not None and is_staff(author)
             try:
-                await bot.send_message(
-                    job.created_by,
-                    f"📋 <b>«{job.title}» ishi tugadi.</b>\n\n"
-                    f"Kim chiqdi, kim chiqmadi — belgilab qo'ying. "
-                    f"Bu ishchilarning ishonchlilik ko'rsatkichiga yoziladi.",
-                )
-                for b in bookings:
-                    await bot.send_message(
-                        job.created_by,
-                        f"👤 {b.user.mention}\n📱 <code>{b.user.phone or '—'}</code>",
-                        reply_markup=worker_actions_kb(b.id),
-                    )
+                with use_lang(author.lang if author else None):
+                    intro = texts.attendance_author_intro(job)
+                    cards = [
+                        (
+                            f"👤 {b.user.mention}\n📱 <code>{b.user.phone or '—'}</code>",
+                            worker_actions_kb(b.id, can_block=author_is_staff),
+                        )
+                        for b in bookings
+                    ]
+                await bot.send_message(job.created_by, intro)
+                for text, kb in cards:
+                    await bot.send_message(job.created_by, text, reply_markup=kb)
                     await asyncio.sleep(0.05)
             except Exception as e:
                 log.debug("Muallifga davomat ro'yxati yetmadi: %s", e)
@@ -254,36 +267,55 @@ async def broadcast_job(bot: Bot, job_id: int, report_to: int | None = None) -> 
     from bot.db.base import SessionMaker
     from bot.keyboards import job_view_kb
 
+    # Har til uchun matn va tugmalar ALOHIDA yasaladi — ruscha tanlaganlar
+    # ruscha e'lon oladi. Ikki tarqatish emas: har guruh o'z navbatida
+    # ketadi, umumiy tezlik o'zgarmaydi.
     async with SessionMaker() as session:
         job = await svc.get_job(session, job_id)
         if job is None:
             return
-        user_ids = await svc.subscribers_for_job(session, job)
+        rows = await svc.subscribers_for_job(session, job)
         taken = await svc.taken_count(session, job.id)
-        text = "🆕 <b>Yangi ish e'loni!</b>\n\n" + texts.job_card(job, taken)
-        kb = job_view_kb(job, taken=taken, mine=False, can_wait=False)
 
-    result = await broadcast.send_bulk(bot, user_ids, text, reply_markup=kb)
+        by_lang: dict[str, list[int]] = {}
+        for uid, lang in rows:
+            by_lang.setdefault(lang if lang in ("uz", "ru") else "uz", []).append(uid)
 
-    if result.blocked:
+        rendered: dict[str, tuple[str, object]] = {}
+        for lang in by_lang:
+            with use_lang(lang):
+                rendered[lang] = (
+                    texts.NEW_JOB_BROADCAST_HEADER + "\n\n" + texts.job_card(job, taken),
+                    job_view_kb(job, taken=taken, mine=False, can_wait=False),
+                )
+
+    sent_total, failed_total, blocked_all = 0, 0, []
+    for lang, ids in by_lang.items():
+        text, kb = rendered[lang]
+        result = await broadcast.send_bulk(bot, ids, text, reply_markup=kb)
+        sent_total += result.sent
+        failed_total += result.failed
+        blocked_all.extend(result.blocked)
+
+    if blocked_all:
         # Botni o'chirganlarni belgilab qo'yamiz — keyingi tarqatishlar
         # shuncha tezroq bo'ladi.
         async with SessionMaker() as session:
-            for uid in result.blocked:
+            for uid in blocked_all:
                 await svc.deactivate(session, uid)
 
     log.info(
         "E'lon #%s tarqatildi: %s yuborildi, %s bloklagan, %s xato",
-        job_id, result.sent, len(result.blocked), result.failed,
+        job_id, sent_total, len(blocked_all), failed_total,
     )
     if report_to:
         try:
             await bot.send_message(
                 report_to,
                 f"📨 E'lon <code>#{job_id}</code> tarqatildi:\n"
-                f"✅ {result.sent} ta yetdi\n"
-                f"🚫 {len(result.blocked)} ta botni o'chirgan\n"
-                f"⚠️ {result.failed} ta xato",
+                f"✅ {sent_total} ta yetdi\n"
+                f"🚫 {len(blocked_all)} ta botni o'chirgan\n"
+                f"⚠️ {failed_total} ta xato",
             )
         except Exception:
             pass

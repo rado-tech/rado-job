@@ -9,22 +9,24 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.callbacks import NavCB, PickCB
+from bot.callbacks import NavCB, PickCB, RateCB, WorkerCB
 from bot.config import CATEGORY_NAMES, settings as env
-from bot.db.models import Role, User
-from bot.i18n import LANGS, set_lang
+from bot.db.models import Booking, BookingStatus, Job, Role, User
+from bot.i18n import LANGS, set_lang, use_lang
 from bot.keyboards import (
     categories_multi_kb,
     lang_kb,
     main_menu,
     phone_kb,
+    rate_kb,
     regions_kb,
     role_kb,
     variants,
 )
 from bot import runtime
-from bot.permissions import is_staff
-from bot.services import jobs as svc
+from bot.permissions import is_admin, is_staff
+from bot.services import audit, jobs as svc
+from bot.services import ratings
 from bot.services import settings_store as store
 from bot.states import Reg
 
@@ -380,3 +382,149 @@ async def cmd_id(message: Message) -> None:
         f"Chat ID: <code>{message.chat.id}</code>\n"
         f"Sizning ID: <code>{message.from_user.id}</code>"
     )
+
+
+# ================================================================ davomat belgilash
+
+@router.callback_query(WorkerCB.filter())
+async def worker_action(
+    call: CallbackQuery, callback_data: WorkerCB, session: AsyncSession, user: User
+) -> None:
+    """Ishchini belgilash: chiqdi / chiqmadi / bloklash.
+
+    Bu handler ataylab UMUMIY routerda: tugmalar ish tugagach ISH
+    BERUVCHIGA ham yuboriladi. Ilgari u faqat xodimlar routerida edi va
+    ish beruvchi bosganda hech narsa bo'lmasdi. Ruxsat ichkarida
+    tekshiriladi: xodim yoki o'sha ishning muallifi.
+    """
+    bot = call.bot
+    booking = await session.get(Booking, callback_data.booking_id)
+    if booking is None:
+        await call.answer(texts.NOT_FOUND, show_alert=True)
+        return
+    job = await session.get(Job, booking.job_id)
+    if not (is_staff(user) or (job is not None and job.created_by == user.id)):
+        await call.answer(texts.NO_ACCESS, show_alert=True)
+        return
+    target = await session.get(User, booking.user_id)
+
+    if callback_data.action == "done":
+        await svc.mark_completed(session, booking)
+        await call.answer("✅")
+        suffix = texts.BTN_MARK_DONE
+        if is_staff(user):
+            await audit.log_action(
+                session, user.id, "worker_done", f"ariza #{booking.id}",
+                target.full_name if target else "",
+            )
+    elif callback_data.action == "noshow":
+        await svc.mark_no_show(session, booking)
+        await call.answer("🚷")
+        suffix = texts.BTN_MARK_NOSHOW
+        if is_staff(user):
+            await audit.log_action(
+                session, user.id, "worker_noshow", f"ariza #{booking.id}",
+                target.full_name if target else "",
+            )
+        try:
+            with use_lang(target.lang if target else None):
+                note = texts.NOSHOW_MARKED
+            await bot.send_message(booking.user_id, note)
+        except Exception:
+            pass
+    else:
+        # Bloklash — jiddiy va qaytarish qiyin amal, faqat admin qiladi.
+        if not is_admin(user):
+            await call.answer("Bloklash faqat administrator qo'lidan keladi.", show_alert=True)
+            return
+        if target and target.id not in env.admins:
+            target.is_blocked = True
+            await session.commit()
+            await audit.log_action(session, user.id, "user_block", target.mention)
+        await call.answer("🚫 Bloklandi")
+        suffix = "🚫 Bloklandi"
+
+    try:
+        await call.message.edit_text(
+            (call.message.text or "") + f"\n\n<b>{suffix}</b>", reply_markup=None
+        )
+    except Exception:
+        pass
+
+    # Ish beruvchi o'z ishchisini «chiqdi» deb belgiladi — baho so'raymiz.
+    # Xodim belgilaganda so'ramaymiz: baho ish beruvchiniki bo'lishi kerak.
+    if (
+        callback_data.action == "done"
+        and job is not None
+        and user.id == job.created_by
+        and target is not None
+        and target.id != user.id
+    ):
+        await call.message.answer(
+            texts.RATE_WORKER_ASK, reply_markup=rate_kb("w", booking.id)
+        )
+
+
+# ================================================================ baho
+
+@router.callback_query(RateCB.filter())
+async def rate_answer(
+    call: CallbackQuery, callback_data: RateCB, session: AsyncSession, user: User
+) -> None:
+    """1-5 baho tugmasi. Natijani faqat administratsiya ko'radi."""
+    if callback_data.kind == "e":
+        # Ishchi ish beruvchini baholaydi — faqat shu ishda qatnashgan bo'lsa.
+        job = await session.get(Job, callback_data.ref)
+        if job is None:
+            await call.answer(texts.NOT_FOUND, show_alert=True)
+            return
+        from sqlalchemy import select
+
+        booking = await session.scalar(
+            select(Booking).where(
+                Booking.job_id == job.id,
+                Booking.user_id == user.id,
+                Booking.status.in_(
+                    [BookingStatus.CONFIRMED, BookingStatus.COMPLETED]
+                ),
+            )
+        )
+        if booking is None:
+            await call.answer(texts.NO_ACCESS, show_alert=True)
+            return
+        target_id, job_id = job.created_by, job.id
+    else:
+        # Ish beruvchi ishchini baholaydi — faqat o'z e'loni bo'yicha.
+        booking = await session.get(Booking, callback_data.ref)
+        if booking is None:
+            await call.answer(texts.NOT_FOUND, show_alert=True)
+            return
+        job = await session.get(Job, booking.job_id)
+        if job is None or (user.id != job.created_by and not is_staff(user)):
+            await call.answer(texts.NO_ACCESS, show_alert=True)
+            return
+        target_id, job_id = booking.user_id, booking.job_id
+
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if callback_data.stars <= 0:
+        await call.answer(texts.RATE_SKIPPED)
+        return
+    if target_id == user.id:
+        await call.answer()
+        return
+
+    await ratings.add(
+        session, job_id=job_id, rater_id=user.id, target_id=target_id,
+        stars=callback_data.stars,
+    )
+    await call.answer(texts.RATE_THANKS)
+    try:
+        await call.message.edit_text(
+            (call.message.text or "") + f"\n\n{'⭐' * callback_data.stars}"
+        )
+    except Exception:
+        pass

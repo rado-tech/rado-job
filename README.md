@@ -216,6 +216,12 @@ Har bir kanalga **hudud** va **kasb** filtri qo'yish mumkin:
 ko'radi va obunani bekor qiladi. Filtr bilan har kanal o'z auditoriyasiga
 mos e'lon oladi.
 
+**Joylashda tanlov.** E'lon tasdiqlanganda moderator qayerga joylashni
+tanlaydi: **mos kanallarga** (filtrlar bo'yicha), **barcha kanallarga**,
+**qo'lda tanlab** (10 tadan sahifalab — 40-50 kanalda ham qulay) yoki
+**umuman joylamaslik**. Kanallar ro'yxati va reklama tanlovi ham 10 tadan
+sahifalanadi.
+
 **Yuklama.** Joy to'lganda bot har bir kanaldagi postni alohida tahrirlashi
 kerak. Ortiqcha so'rov bo'lmasligi uchun bot **matn barmoq izini** saqlaydi
 va o'zgarish bo'lmasa Telegramga umuman murojaat qilmaydi.
@@ -239,6 +245,18 @@ beriladi — bot o'lik kanalga urinib vaqt sarflamaydi.
 | 👥 Foydalanuvchilar, telefon raqamlar | ❌ | ✅ |
 | 🚫 Bloklash | ❌ | ✅ |
 | 🛡 Moderator tayinlash | ❌ | ✅ |
+| 📋 Xodimlar jurnali | ❌ | ✅ |
+
+**Jurnal.** Har muhim harakat (chek tasdiqlash/rad, e'lon tasdiqlash,
+tahrirlash, bloklash, kanal qo'shish, reklama, zaxira…) **kim** qilgani
+bilan yozib boriladi: `⚙️ Sozlamalar` → `📋 Jurnal` yoki `/jurnal`.
+Bir nechta moderator ishlaganda «kim rad etdi?» degan savolga javob shu.
+
+**Ikki tomonlama baho.** Ish tugagach ishchi ish beruvchini, ish beruvchi
+ishchini 1-5 yulduz bilan baholaydi (ixtiyoriy). Natijani **faqat admin va
+moderatorlar** ko'radi — foydalanuvchi kartochkasida va yozilganlar
+ro'yxatida. Bu past sifatli ish beruvchini yoki muammoli ishchini erta
+payqash vositasi.
 
 Moderator qo'shish: `⚙️ Sozlamalar` → `🛡 Moderatorlar` → `➕`, yoki
 `/mod 123456789`. U avval botga `/start` yozgan bo'lishi kerak.
@@ -318,9 +336,14 @@ yozsangiz: ishlash muddati, baza hajmi, oxirgi zaxira, baza butunligi.
 ### 3. Zaxira nusxa
 
 **Avtomat:** har kuni tunda 04:00 da bot bazadan nusxa oladi va uni
-**Telegram orqali sizga fayl qilib yuboradi** — bepul tashqi zaxira.
-Server yonib ketsa ham baza Telegramingizda qoladi. Serverda oxirgi 14 ta
-nusxa `backups/` da.
+**zaxira kanaliga** (ulangan bo'lsa; aks holda adminlarga shaxsan) fayl
+qilib yuboradi — bepul tashqi zaxira. Server yonib ketsa ham baza
+Telegramda qoladi. Serverda oxirgi 14 ta nusxa `backups/` da.
+
+Nusxa **`.gz` qilib siqiladi** (5-8 barobar kichik) — Telegramning 50 MB
+fayl chegarasiga yetish yillarga uzoqlashadi. Kanal ulangan-u yuborish
+ishlamasa, bot buni **jimgina yashirmaydi** — adminlarga sabab bilan
+ogohlantirish yuboradi.
 
 Bot 04:00 da o'chib turgan bo'lsa, ishga tushishi bilan tekshiradi: oxirgi
 nusxa 20 soatdan eski bo'lsa darhol yangisini oladi.
@@ -346,11 +369,12 @@ Botni to'xtating (`Ctrl+C`), keyin:
 Nusxalar ro'yxatini har birining holati bilan ko'rsatadi. Keyin:
 
 ```bash
-.venv\Scripts\python.exe restore.py backups\rado_job-20260804-0400.db
+.venv\Scripts\python.exe restore.py backups\rado_job-20260804-0400.db.gz
 ```
 
-Skript nusxani **avval tekshiradi** (buzuq bo'lsa tiklamaydi) va hozirgi
-bazani **o'chirmaydi** — nomini o'zgartirib chetga oladi.
+Skript `.gz` nusxani **o'zi ochadi**, **avval tekshiradi** (buzuq bo'lsa
+tiklamaydi) va hozirgi bazani **o'chirmaydi** — nomini o'zgartirib chetga
+oladi.
 
 ### 5. Baza buzilishiga qarshi
 
@@ -499,6 +523,10 @@ Tekshirish uchun: botni sinov guruhiga qo'shing va u yerda `/sozlama`,
 - **Jurnal fayli**: `logs/bot.log`, 5 MB dan oshganda avtomat almashadi.
 - **Avtomat sxema yangilash**: yangi funksiya qo'shilganda baza o'chirilmaydi,
   yetishmayotgan ustunlar o'zi qo'shiladi.
+- **FSM bazada**: yarim to'ldirilgan formalar (e'lon yozish, telefon
+  kiritish) bot qayta ishga tushganda YO'QOLMAYDI — odam qolgan joyidan
+  davom etadi. Deploy foydalanuvchiga sezilmaydi. Eski qoldiqlar 3 kundan
+  keyin avtomat tozalanadi.
 
 PostgreSQL'ga o'tish uchun `.env` da bitta qator:
 ```
@@ -515,9 +543,16 @@ Kodga o'zgartirish kiritganingizdan keyin:
 .venv\Scripts\python.exe smoke_test.py
 ```
 
-Telegramsiz, 3 soniyada 40 ta holatni tekshiradi: joy to'lishi, navbat,
-bron muddati, bir vaqtda yozilish, filtrlar, obuna ro'yxati, ish beruvchi
-oqimi.
+Telegramsiz, bir necha soniyada 200+ holatni tekshiradi: joy to'lishi,
+navbat, bron muddati, bir vaqtda yozilish, filtrlar, obuna ro'yxati, ish
+beruvchi oqimi, baho, jurnal, FSM saqlanishi, zaxira siqilishi.
+
+```bash
+.venv\Scripts\python.exe wiring_test.py
+```
+
+Yig'ilish testi: importlar, tugmalar, 64-bayt callback chegarasi,
+maxfiylik, ikki tillilik. Ikkalasi ham CI'da har push'da ishlaydi.
 
 ---
 

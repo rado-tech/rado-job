@@ -129,5 +129,44 @@ class ChatCB(CallbackData, prefix="c"):
     chat_id: int
 
 
+class RateCB(CallbackData, prefix="rt"):
+    """Ish yakunida 1-5 baho.
+
+    kind: "e" — ishchi ish beruvchini, "w" — ish beruvchi ishchini baholaydi.
+    ref: kind="e" da job_id (kim baholanishi ish muallifidan topiladi),
+         kind="w" da booking_id (undan ishchi va ish topiladi).
+    stars=0 — «o'tkazib yuborish».
+    """
+
+    kind: str  # e | w
+    ref: int
+    stars: int
+
+
+class PubCB(CallbackData, prefix="pb"):
+    """E'lonni kanallarga joylash tanlovi: mos / barcha / qo'lda / joylamaslik.
+
+    value ko'p vazifali: auto/all/skip/pick da «tarqatish kerakmi» belgisi
+    (1 — obunachilarga ham yuboriladi, 0 — faqat kanallar, masalan qayta
+    joylashda), t da kanal ID, page da sahifa raqami.
+    """
+
+    action: str  # auto | all | pick | skip | t | page | done
+    job_id: int
+    value: int = 0
+
+
+class LogCB(CallbackData, prefix="lg"):
+    """Moderator harakatlari jurnalini varaqlash."""
+
+    page: int = 0
+
+
+class ChanListCB(CallbackData, prefix="chl"):
+    """Kanallar ro'yxatini varaqlash (40-50 kanal sig'ishi uchun)."""
+
+    page: int = 0
+
+
 class NavCB(CallbackData, prefix="n"):
     to: str  # menu | feed | mybookings | admin | noop

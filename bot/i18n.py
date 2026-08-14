@@ -18,6 +18,7 @@ hech qachon bo'sh joy chiqmaydi.
 from __future__ import annotations
 
 import contextvars
+from contextlib import contextmanager
 
 LANGS = {"uz": "🇺🇿 O'zbekcha", "ru": "🇷🇺 Русский"}
 DEFAULT = "uz"
@@ -40,3 +41,20 @@ def is_ru() -> bool:
 def pick(uz_value, ru_value):  # noqa: ANN001, ANN201
     """Ikki qiymatdan joriy tilga mosini tanlaydi."""
     return ru_value if is_ru() else uz_value
+
+
+@contextmanager
+def use_lang(lang: str | None):
+    """Blok ichida QABUL QILUVCHINING tilini vaqtincha o'rnatadi.
+
+    Fon vazifalari (eslatma, davomat, bekor qilish xabari) middleware'dan
+    o'tmaydi — ularda til o'z-o'zidan o'rnatilmaydi. Busiz rus tilini
+    tanlagan odamga o'zbekcha eslatma borardi. Blokdan chiqqach avvalgi
+    til qaytariladi, shu tufayli bitta xabar boshqasining tilini buzmaydi.
+    """
+    prev = _current.get()
+    set_lang(lang)
+    try:
+        yield
+    finally:
+        _current.set(prev)

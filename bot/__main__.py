@@ -10,7 +10,6 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
@@ -28,6 +27,7 @@ from bot.db.base import (
     integrity_check,
     pending_schema_changes,
 )
+from bot.fsm_storage import DbStorage
 from bot.handlers import build_router
 from bot.middlewares import (
     DbSessionMiddleware,
@@ -157,10 +157,10 @@ async def main() -> None:
     runtime.bot_username = me.username or ""
     log.info("Bot ishga tushdi: @%s (id=%s)", runtime.bot_username, me.id)
 
-    # MemoryStorage — FSM holatlari xotirada. Bot qayta ishga tushsa
-    # yo'qoladi; eng yomoni odam e'lonni qaytadan ochadi. Bir nechta
-    # nusxada ishlatmoqchi bo'lsangiz RedisStorage'ga o'tasiz.
-    dp = Dispatcher(storage=MemoryStorage())
+    # FSM holatlari bazada: bot qayta ishga tushsa ham yarim to'ldirilgan
+    # forma (e'lon yaratish, telefon kiritish) yo'qolmaydi — odam qolgan
+    # joyidan davom etadi.
+    dp = Dispatcher(storage=DbStorage(SessionMaker))
 
     # OUTER middleware — filtrlardan OLDIN ishlaydi. Bu majburiy, chunki
     # huquq filtrlari (IsAdmin/IsStaff) rolni bazadan olingan `user`
@@ -259,7 +259,7 @@ async def _shutdown(bot: Bot, task: asyncio.Task) -> None:
                     # faqat diskka saqlaymiz. Tez-tez restartda spam bo'lmaydi.
                     min_hours_since_sent=20,
                 ),
-                timeout=20,
+                timeout=25,
             )
     except Exception as e:
         log.warning("To'xtashdagi zaxira olinmadi: %s", e)

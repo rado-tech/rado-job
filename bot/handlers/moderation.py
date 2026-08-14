@@ -18,11 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from bot import texts
-from bot.callbacks import JobModCB, ModCB, RejCB
+from bot.callbacks import JobModCB, ModCB, PubCB, RejCB
 from bot.db.models import Booking, BookingStatus, JobStatus, User
-from bot.keyboards import REJECT_REASONS, reject_reasons_kb, undo_kb
+from bot.i18n import use_lang
+from bot.keyboards import REJECT_REASONS, publish_pick_kb, reject_reasons_kb, undo_kb
 from bot.permissions import IsStaff
-from bot.services import jobs as svc
+from bot.services import audit, channels as ch, jobs as svc
 from bot.services import notifier, publisher
 from bot.states import Moderation
 
@@ -84,8 +85,10 @@ async def approve(
     await svc.confirm_booking(session, booking, user.id)
 
     # Ishchiga maxfiy ma'lumot + xarita nuqtasi — mana shu uchun u pul to'lagan.
+    # Til — ISHCHINIKI: moderator o'zbek bo'lsa ham ruscha tanlagan ishchiga
+    # ruscha boradi.
     try:
-        await notifier.send_secret(bot, booking.user_id, booking.job)
+        await notifier.send_secret(bot, booking.user_id, booking.job, lang=booking.user.lang)
     except Exception as e:
         log.warning("Ishchiga xabar yuborilmadi %s: %s", booking.user_id, e)
         await call.message.answer(
@@ -97,6 +100,9 @@ async def approve(
         call, f"\n\n✅ <b>TASDIQLANDI</b> — {user.full_name}", booking_id=booking.id
     )
     await call.answer("✅ Tasdiqlandi")
+    await audit.log_action(
+        session, user.id, "receipt_ok", f"ariza #{booking.id}", booking.user.full_name
+    )
     await publisher.sync_job_post(bot, session, booking.job)
     # Bu odam kimningdir havolasi orqali kelgan bo'lsa — chaqiruvchiga bonus.
     await notifier.reward_referrer_if_first(bot, session, booking.user_id)
@@ -184,13 +190,18 @@ async def _do_reject(
     await svc.reject_booking(session, booking, user.id, reason)
 
     try:
-        await bot.send_message(booking.user_id, texts.booking_rejected(booking.job, reason))
+        with use_lang(booking.user.lang):
+            note = texts.booking_rejected(booking.job, reason)
+        await bot.send_message(booking.user_id, note)
     except Exception as e:
         log.warning("Rad etish xabari yetmadi %s: %s", booking.user_id, e)
 
     await message.answer(
         f"❌ Ariza #{booking.id} rad etildi. Joy bo'shatildi."
         + (f"\nSabab: <i>{reason}</i>" if reason else "")
+    )
+    await audit.log_action(
+        session, user.id, "receipt_no", f"ariza #{booking.id}", reason or ""
     )
 
     if mod_msg_id := data.get("mod_message_id"):
@@ -229,13 +240,15 @@ async def undo(
 
     await call.answer("↩️ Qaytarildi")
     await _mark_done_undo(call, user.full_name)
+    await audit.log_action(session, user.id, "undo", f"ariza #{booking.id}")
 
-    # Ishchiga ham aytamiz — u allaqachon qarorni ko'rgan.
+    # Ishchiga ham aytamiz — u allaqachon qarorni ko'rgan. Til — ishchiniki.
     try:
-        if was == BookingStatus.CONFIRMED:
-            note = texts.undo_after_confirm(booking.job)
-        else:
-            note = texts.undo_after_reject(booking.job)
+        with use_lang(booking.user.lang):
+            if was == BookingStatus.CONFIRMED:
+                note = texts.undo_after_confirm(booking.job)
+            else:
+                note = texts.undo_after_reject(booking.job)
         await bot.send_message(booking.user_id, note)
     except Exception as e:
         log.debug("Qaytarish xabari yetmadi (%s): %s", booking.user_id, e)
@@ -264,7 +277,8 @@ async def _mark_done_undo(call: CallbackQuery, who: str) -> None:
 
 @router.callback_query(JobModCB.filter(F.action == "ok"))
 async def approve_job(
-    call: CallbackQuery, callback_data: JobModCB, session: AsyncSession, bot: Bot
+    call: CallbackQuery, callback_data: JobModCB, session: AsyncSession,
+    user: User, bot: Bot
 ) -> None:
     job = await svc.get_job(session, callback_data.job_id)
     if job is None:
@@ -278,20 +292,24 @@ async def approve_job(
     job.status = JobStatus.OPEN
     await session.commit()
 
-    await _mark_done(call, "\n\n✅ <b>TASDIQLANDI</b>")
+    await _mark_done(call, f"\n\n✅ <b>TASDIQLANDI</b> — {user.full_name}")
     await call.answer("✅ Tasdiqlandi")
+    await audit.log_action(session, user.id, "job_ok", f"e'lon #{job.id}", job.title)
 
+    # Muallifga — O'Z TILIDA (ish beruvchi ruscha tanlagan bo'lishi mumkin).
+    author = await session.get(User, job.created_by)
     try:
-        await bot.send_message(
-            job.created_by,
-            f"✅ <b>«{job.title}»</b> e'loningiz tasdiqlandi va joylandi!",
-        )
+        with use_lang(author.lang if author else None):
+            note = texts.job_approved(job)
+        await bot.send_message(job.created_by, note)
     except Exception:
         pass
 
-    from bot.handlers.jobpost import publish_and_notify
+    from bot.handlers.jobpost import offer_publish_choice, publish_and_notify
 
-    await publish_and_notify(bot, session, job, report_to=call.from_user.id)
+    # Qayerga joylashni moderator tanlaydi: mos / barcha / qo'lda / hech qayerga.
+    if not await offer_publish_choice(call.message, session, job, broadcast=True):
+        await publish_and_notify(bot, session, job, report_to=call.from_user.id)
 
 
 @router.callback_query(JobModCB.filter(F.action == "no"))
@@ -310,20 +328,21 @@ async def decline_job_ask(
 
 @router.message(Moderation.decline_reason, Command("skip"))
 async def decline_no_reason(
-    message: Message, state: FSMContext, session: AsyncSession, bot: Bot
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
 ) -> None:
-    await _do_decline(message, state, session, bot, None)
+    await _do_decline(message, state, session, user, bot, None)
 
 
 @router.message(Moderation.decline_reason, F.text)
 async def decline_with_reason(
-    message: Message, state: FSMContext, session: AsyncSession, bot: Bot
+    message: Message, state: FSMContext, session: AsyncSession, user: User, bot: Bot
 ) -> None:
-    await _do_decline(message, state, session, bot, message.text.strip()[:250])
+    await _do_decline(message, state, session, user, bot, message.text.strip()[:250])
 
 
 async def _do_decline(
-    message: Message, state: FSMContext, session: AsyncSession, bot: Bot, reason: str | None
+    message: Message, state: FSMContext, session: AsyncSession,
+    user: User, bot: Bot, reason: str | None,
 ) -> None:
     data = await state.get_data()
     await state.set_state(None)
@@ -337,15 +356,17 @@ async def _do_decline(
     job.decline_reason = reason
     await session.commit()
 
+    # Muallifga o'z tilida.
+    author = await session.get(User, job.created_by)
     try:
-        text = f"❌ <b>«{job.title}»</b> e'loningiz rad etildi."
-        if reason:
-            text += f"\n\nSabab: <i>{reason}</i>"
-        await bot.send_message(job.created_by, text)
+        with use_lang(author.lang if author else None):
+            note = texts.job_declined(job, reason)
+        await bot.send_message(job.created_by, note)
     except Exception:
         pass
 
     await message.answer(f"❌ E'lon #{job.id} rad etildi.")
+    await audit.log_action(session, user.id, "job_no", f"e'lon #{job.id}", reason or "")
     if mod_msg_id := data.get("mod_message_id"):
         try:
             await bot.edit_message_reply_markup(
@@ -353,3 +374,164 @@ async def _do_decline(
             )
         except Exception:
             pass
+
+
+# ================================================================ kanalga joylash
+
+async def _publishable_job(call: CallbackQuery, session: AsyncSession, job_id: int):  # noqa: ANN201
+    job = await svc.get_job(session, job_id)
+    if job is None:
+        await call.answer("E'lon topilmadi.", show_alert=True)
+        return None
+    if job.status not in (JobStatus.OPEN, JobStatus.FULL):
+        await call.answer("Bu e'lon ochiq emas — joylab bo'lmaydi.", show_alert=True)
+        return None
+    return job
+
+
+@router.callback_query(PubCB.filter(F.action.in_({"auto", "all", "skip"})))
+async def publish_go(
+    call: CallbackQuery, callback_data: PubCB, session: AsyncSession, user: User, bot: Bot
+) -> None:
+    """«Mos kanallarga» / «Barchaga» / «Joylamaslik» tugmalari."""
+    import asyncio
+
+    from bot.handlers.jobpost import publish_and_notify
+
+    job = await _publishable_job(call, session, callback_data.job_id)
+    if job is None:
+        return
+    broadcast = bool(callback_data.value)
+
+    if callback_data.action == "skip":
+        try:
+            await call.message.edit_text(
+                f"🚫 E'lon <code>#{job.id}</code> kanallarga joylanmadi — "
+                f"faqat botda ko'rinadi."
+            )
+        except Exception:
+            pass
+        await call.answer()
+        if broadcast:
+            asyncio.create_task(notifier.broadcast_job(bot, job.id, call.from_user.id))
+        return
+
+    targets = None  # auto — teglar bo'yicha
+    if callback_data.action == "all":
+        targets = await ch.all_channels(session, only_active=True)
+
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer("📤 Joylanyapti…")
+    await publish_and_notify(
+        bot, session, job,
+        report_to=call.from_user.id, targets=targets, with_broadcast=broadcast,
+    )
+    scope = "barcha kanallar" if callback_data.action == "all" else "mos kanallar"
+    await audit.log_action(session, user.id, "job_post", f"e'lon #{job.id}", scope)
+
+
+@router.callback_query(PubCB.filter(F.action == "pick"))
+async def publish_pick_start(
+    call: CallbackQuery, callback_data: PubCB, state: FSMContext, session: AsyncSession
+) -> None:
+    channels_all = await ch.all_channels(session, only_active=True)
+    if not channels_all:
+        await call.answer("Faol kanal yo'q.", show_alert=True)
+        return
+    await state.update_data(
+        pub_job=callback_data.job_id,
+        pub_picked=[],
+        pub_bc=bool(callback_data.value),
+        pub_page=0,
+    )
+    try:
+        await call.message.edit_text(
+            f"🗂 <b>E'lon <code>#{callback_data.job_id}</code> uchun kanallarni tanlang</b>\n\n"
+            f"Bir nechtasini belgilash mumkin, so'ng «📨 Yuborish»ni bosing.",
+            reply_markup=publish_pick_kb(
+                channels_all, [], job_id=callback_data.job_id, page=0
+            ),
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(PubCB.filter(F.action.in_({"t", "page"})))
+async def publish_pick_toggle(
+    call: CallbackQuery, callback_data: PubCB, state: FSMContext, session: AsyncSession
+) -> None:
+    data = await state.get_data()
+    if data.get("pub_job") != callback_data.job_id:
+        # Boshqa e'lon uchun tanlov ochilgan yoki holat eskirgan.
+        await call.answer("Tanlov eskirgan — «Qo'lda tanlash»ni qayta bosing.", show_alert=True)
+        return
+
+    picked = [int(x) for x in data.get("pub_picked", [])]
+    page = int(data.get("pub_page", 0))
+
+    if callback_data.action == "t":
+        cid = callback_data.value
+        if cid in picked:
+            picked.remove(cid)
+        else:
+            picked.append(cid)
+        await state.update_data(pub_picked=picked)
+    else:
+        page = callback_data.value
+        await state.update_data(pub_page=page)
+
+    channels_all = await ch.all_channels(session, only_active=True)
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=publish_pick_kb(
+                channels_all, picked, job_id=callback_data.job_id, page=page
+            )
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(PubCB.filter(F.action == "done"))
+async def publish_pick_done(
+    call: CallbackQuery, callback_data: PubCB, state: FSMContext,
+    session: AsyncSession, user: User, bot: Bot
+) -> None:
+    from bot.handlers.jobpost import publish_and_notify
+
+    data = await state.get_data()
+    if data.get("pub_job") != callback_data.job_id:
+        await call.answer("Tanlov eskirgan — «Qo'lda tanlash»ni qayta bosing.", show_alert=True)
+        return
+    picked = {int(x) for x in data.get("pub_picked", [])}
+    if not picked:
+        await call.answer("Kamida bitta kanal tanlang.", show_alert=True)
+        return
+
+    job = await _publishable_job(call, session, callback_data.job_id)
+    if job is None:
+        return
+
+    channels_all = await ch.all_channels(session, only_active=True)
+    targets = [c for c in channels_all if c.id in picked]
+    await state.update_data(pub_job=None, pub_picked=[], pub_page=0)
+
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer("📤 Joylanyapti…")
+    await publish_and_notify(
+        bot, session, job,
+        report_to=call.from_user.id,
+        targets=targets,
+        with_broadcast=bool(data.get("pub_bc", True)),
+    )
+    names = ", ".join(c.title or str(c.chat_id) for c in targets[:5])
+    await audit.log_action(
+        session, user.id, "job_post", f"e'lon #{job.id}", f"{len(targets)} ta: {names}"[:250]
+    )

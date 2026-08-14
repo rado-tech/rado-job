@@ -304,14 +304,18 @@ async def main() -> None:
               await svc.pending_payment_booking(s, w2.id) is None)
 
         section("Obuna bo'yicha tarqatish ro'yxati")
-        subs = await svc.subscribers_for_job(s, job)
+        # Endi (id, til) juftliklari qaytadi — tarqatish har kimga o'z
+        # tilida ketishi uchun.
+        rows = await svc.subscribers_for_job(s, job)
+        subs = [uid for uid, _lang in rows]
+        check("til ham qaytdi", all(lang in ("uz", "ru") for _uid, lang in rows))
         check("kasbga obuna bo'lgan chaqirildi", w1.id in subs)
         check("boshqa kasbga obuna chaqirilmadi", w2.id not in subs)
         check("boshqa hududdagi chaqirilmadi", w3.id not in subs)
         check("ish beruvchi chaqirilmadi", emp.id not in subs)
 
         await svc.deactivate(s, w1.id)
-        subs = await svc.subscribers_for_job(s, job)
+        subs = [uid for uid, _lang in await svc.subscribers_for_job(s, job)]
         check("botni o'chirgan chaqirilmadi", w1.id not in subs)
 
         section("Ish beruvchi e'loni tasdiqdan o'tadi")
@@ -807,19 +811,27 @@ async def main() -> None:
         check("hisobot matni yasaldi", "Kunlik hisobot" in text and len(text) > 100)
         check("chiqish darajasi ko'rsatildi", "%" in text or "—" in text)
 
-        section("Zaxira nusxa")
+        section("Zaxira nusxa (.gz)")
         path = await backup.create(stamp="test")
         check("nusxa yaratildi", path is not None and path.exists())
         if path:
-            check("nusxa bo'sh emas", path.stat().st_size > 1000)
-            # Nusxa haqiqiy baza ekanini tekshiramiz — ochib o'qiymiz
-            con = sqlite3.connect(path)
+            check("nusxa siqilgan (.gz)", path.name.endswith(".db.gz"))
+            check("nusxa bo'sh emas", path.stat().st_size > 200)
+            # Siqilgan nusxa haqiqiy baza ekanini tekshiramiz — ochib o'qiymiz.
+            import gzip as _gzip
+            import shutil as _shutil
+
+            unpacked = path.with_name("unpacked-smoke.db")
+            with _gzip.open(path, "rb") as fin, open(unpacked, "wb") as fout:
+                _shutil.copyfileobj(fin, fout)
+            con = sqlite3.connect(unpacked)
             n = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             bad = con.execute("PRAGMA quick_check").fetchone()[0]
             con.close()
             check("nusxadan o'qish mumkin", n >= 5)
             check("nusxa buzilmagan", bad == "ok")
             check("zaxira yoshi hisoblandi", (backup.age_hours() or 99) < 1)
+            unpacked.unlink(missing_ok=True)
             path.unlink(missing_ok=True)
         check("baza hajmi o'lchandi", backup.db_size_kb() > 0)
 
@@ -889,6 +901,102 @@ async def main() -> None:
         st = await svc.stats(s)
         check("tasdiqlanganlar sanaldi", st["confirmed"] >= 2)
         check("ish beruvchilar sanaldi", st["employers"] == 1)
+
+        # ======================================================== baho
+        section("Ikki tomonlama baho (faqat admin ko'radi)")
+        from bot.services import ratings
+
+        await ratings.add(s, job_id=paid_rev.id, rater_id=w3.id, target_id=emp.id, stars=5)
+        await ratings.add(s, job_id=paid_rev.id, rater_id=emp.id, target_id=w3.id, stars=4)
+        emp_sum = await ratings.summary_for(s, emp.id)
+        check("ish beruvchi bahosi hisoblandi", emp_sum == (5.0, 1))
+
+        # Qayta bosish yangi qator ochmaydi — bahoni yangilaydi.
+        await ratings.add(s, job_id=paid_rev.id, rater_id=w3.id, target_id=emp.id, stars=2)
+        emp_sum = await ratings.summary_for(s, emp.id)
+        check("qayta baho eskisini almashtirdi", emp_sum == (2.0, 1))
+
+        # Chegaradan tashqari qiymat kesiladi.
+        await ratings.add(s, job_id=free_rev.id, rater_id=w1.id, target_id=emp.id, stars=99)
+        emp_sum = await ratings.summary_for(s, emp.id)
+        check("baho 1-5 oralig'ida kesildi", emp_sum == (3.5, 2))
+
+        check("bahosi yo'q odam uchun None", await ratings.summary_for(s, 999_999) is None)
+        check("kartochka qatori yasaldi", "3.5" in ratings.line(emp_sum))
+        check("baho yo'q qatori", "yo'q" in ratings.line(None))
+
+        # ======================================================== jurnal
+        section("Moderator harakatlari jurnali")
+        from bot.services import audit
+
+        await audit.log_action(s, admin.id, "receipt_ok", "ariza #1", "Test ishchi")
+        await audit.log_action(s, admin.id, "job_post", "e'lon #2", "3 ta kanal")
+        rows_a, total_a = await audit.recent(s, offset=0, limit=10)
+        check("yozuvlar saqlandi", total_a >= 2)
+        check("oxirgisi birinchi turadi", rows_a[0].action == "job_post")
+        check("harakat nomi o'girildi", "chek" in audit.label("receipt_ok"))
+        check("noma'lum kod buzmaydi", audit.label("yoq_kod") == "yoq_kod")
+
+        # Sahifalash to'g'ri kesadi.
+        rows_p, _ = await audit.recent(s, offset=1, limit=1)
+        check("jurnal sahifalanadi", len(rows_p) == 1 and rows_p[0].action == "receipt_ok")
+
+        # ======================================================== FSM bazada
+        section("FSM holati bazada (restartga chidamli)")
+        from aiogram.fsm.storage.base import StorageKey
+
+        from bot.fsm_storage import DbStorage, cleanup as fsm_cleanup
+        from bot.db.models import FsmState
+
+        storage = DbStorage(SessionMaker)
+        key = StorageKey(bot_id=1, chat_id=111, user_id=111)
+        await storage.set_state(key, "NewJob:title")
+        await storage.set_data(key, {"category": "yuk", "salary": 200_000, "editing": True})
+
+        # «Restart»: YANGI storage obyekti — xotira emas, baza ishlayapti.
+        storage2 = DbStorage(SessionMaker)
+        check("holat restartdan keyin saqlanib qoldi",
+              await storage2.get_state(key) == "NewJob:title")
+        data = await storage2.get_data(key)
+        check("ma'lumot ham saqlanib qoldi",
+              data.get("category") == "yuk" and data.get("editing") is True)
+
+        # Holat tugashi: state None + bo'sh data -> qator o'chadi.
+        await storage2.set_state(key, None)
+        await storage2.set_data(key, {})
+        check("tugagan holat qatori o'chirildi",
+              await s.get(FsmState, "1:111:111:default") is None)
+
+        # Eski qoldiqlarni tozalash.
+        await storage.set_state(key, "Reg:phone")
+        row = await s.get(FsmState, "1:111:111:default")
+        row.updated_at = utcnow() - timedelta(hours=100)
+        await s.commit()
+        removed = await fsm_cleanup(s)
+        check("eski FSM qoldig'i tozalandi", removed >= 1)
+        check("yangi holatlarga tegilmadi", await storage.get_state(key) is None)
+
+        # ======================================================== kanal tanlash
+        section("Kanalga joylash maqsadlari")
+        from bot.db.models import Channel
+
+        c1 = Channel(chat_id=-100111, title="Chilonzor ishlari", kind="channel",
+                     regions="|Chilonzor|")
+        c2 = Channel(chat_id=-100222, title="Umumiy kanal", kind="channel")
+        c3 = Channel(chat_id=-100333, title="Sergeli ishlari", kind="channel",
+                     regions="|Sergeli|")
+        s.add_all([c1, c2, c3])
+        await s.commit()
+
+        # job hududi Chilonzor edi — mos: c1 (teg mos) va c2 (filtrsiz).
+        matched = await ch.targets_for(s, job)
+        matched_ids = {c.id for c in matched}
+        check("teg mos kanal tanlandi", c1.id in matched_ids)
+        check("filtrsiz kanal ham tanlandi", c2.id in matched_ids)
+        check("boshqa hudud kanali tanlanmadi", c3.id not in matched_ids)
+
+        all_active = await ch.all_channels(s, only_active=True)
+        check("barcha faol kanallar ro'yxati", len(all_active) >= 3)
 
     await engine.dispose()
     DB_FILE.unlink(missing_ok=True)

@@ -11,9 +11,9 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.callbacks import AdminJobCB, ReportCB, UserCB, UsersCB, WorkerCB
-from bot.config import settings as env
-from bot.db.models import UNLOCKED, BookingStatus, JobStatus, Role, User
+from bot.callbacks import AdminJobCB, ReportCB, UserCB, UsersCB
+from bot.db.models import UNLOCKED, JobStatus, Role, User
+from bot.i18n import use_lang
 from bot.keyboards import (
     variants,
     BTN_ALL_ADS,
@@ -33,8 +33,8 @@ from bot.keyboards import (
     worker_actions_kb,
 )
 from bot.permissions import IsAdmin, IsStaff, is_admin, is_owner
-from bot.services import channels, jobs as svc
-from bot.services import publisher, reports
+from bot.services import audit, channels, jobs as svc
+from bot.services import publisher, ratings, reports
 from bot.services import settings_store as store
 from bot.states import ReportFlow, Search
 
@@ -95,11 +95,13 @@ async def job_workers(call: CallbackQuery, callback_data: AdminJobCB, session: A
     await call.answer()
     await call.message.answer(f"👥 <b>E'lon #{callback_data.job_id} — yozilganlar</b>")
     for i, b in enumerate(bookings, 1):
+        # Baho faqat shu yerda (xodimlar ko'radigan ro'yxatda) ko'rinadi.
+        summary = await ratings.summary_for(session, b.user_id)
         text = (
             f"{i}. {texts.BOOKING_STATUS_LABEL[b.status]}\n"
             f"👤 {b.user.mention}\n"
             f"📱 <code>{b.user.phone or '—'}</code>\n"
-            f"📊 {b.user.reliability}"
+            f"📊 {b.user.reliability} · {ratings.line(summary)}"
         )
         # Tugmalar tafsilotlarni olgan hamma uchun ko'rinadi — shu jumladan
         # allaqachon belgilanganlar uchun ham, chunki xato bosilgan qarorni
@@ -126,6 +128,11 @@ async def job_toggle(
 
     await publisher.sync_job_post(bot, session, job)
     await call.answer("✅ O'zgartirildi")
+    await audit.log_action(
+        session, call.from_user.id,
+        "job_close" if callback_data.action == "close" else "job_reopen",
+        f"e'lon #{job.id}", job.title,
+    )
 
     taken = await svc.taken_count(session, job.id)
     await call.message.edit_text(
@@ -156,6 +163,10 @@ async def job_toggle_fee(
     new_fee = store.default_fee() if job.fee <= 0 else 0
     await svc.set_fee(session, job, new_fee)
     await call.answer("🆓 Bepul bo'ldi" if new_fee == 0 else f"💳 {texts.money(new_fee)}")
+    await audit.log_action(
+        session, call.from_user.id, "job_fee", f"e'lon #{job.id}",
+        "bepul" if new_fee == 0 else texts.money(new_fee),
+    )
 
     # Kanallardagi postda ham darhol ko'rinsin.
     await publisher.sync_job_post(bot, session, job)
@@ -169,15 +180,22 @@ async def job_toggle_fee(
 async def job_repost(
     call: CallbackQuery, callback_data: AdminJobCB, session: AsyncSession, bot: Bot
 ) -> None:
-    """Kanalga joylash muvaffaqiyatsiz bo'lgan e'lonni qayta urinish."""
+    """Kanallarga (qayta) joylash — tanlov bilan.
+
+    broadcast=False: obunachilarga bot orqali xabar KETMAYDI — ular buni
+    e'lon birinchi chiqqanda allaqachon olishgan, ikkinchi marta yuborish
+    spam bo'lardi.
+    """
+    from bot.handlers.jobpost import offer_publish_choice
+
     job = await svc.get_job(session, callback_data.job_id)
     if job is None:
         await call.answer("Topilmadi", show_alert=True)
         return
-    posted, errors = await publisher.publish_job(bot, session, job)
-    await call.answer(f"📢 {posted} ta kanalga joylandi" if posted else "Kanal ulanmagan")
-    if errors:
-        await call.message.answer("⚠️ Xatolar:\n" + "\n".join(errors)[:900])
+    if not await offer_publish_choice(call.message, session, job, broadcast=False):
+        await call.answer("Kanal ulanmagan", show_alert=True)
+        return
+    await call.answer()
 
 
 # ================================================================ to'lovlar
@@ -235,6 +253,7 @@ async def report_close(
         return
     await reports.close(session, report, user.id)
     await call.answer("✅ Yopildi")
+    await audit.log_action(session, user.id, "report_close", f"murojaat #{report.id}")
     try:
         await call.message.edit_text(
             (call.message.text or "") + f"\n\n✅ <b>YOPILDI</b> — {user.full_name}",
@@ -272,9 +291,14 @@ async def report_answer_send(
 
     answer = message.text.strip()[:2000]
     await reports.answer(session, report, user.id, answer)
+    await audit.log_action(session, user.id, "report_answer", f"murojaat #{report.id}")
 
     try:
-        await bot.send_message(report.user_id, texts.report_answer(answer))
+        # Javob murojaat EGASINING tilida ketadi.
+        target = await session.get(User, report.user_id)
+        with use_lang(target.lang if target else None):
+            note = texts.report_answer(answer)
+        await bot.send_message(report.user_id, note)
         await message.answer(f"✅ Javob yuborildi (murojaat #{report.id}).")
     except Exception as e:
         await message.answer(f"⚠️ Javob yetib bormadi: {e}"[:300])
@@ -421,6 +445,8 @@ async def show_user_card(message: Message, session: AsyncSession, target: User) 
         Role.MODERATOR: "🛡 Moderator",
         Role.ADMIN: "👑 Administrator",
     }[target.role]
+    # O'zaro baholar natijasi FAQAT shu yerda (admin kartochkasida) ko'rinadi.
+    summary = await ratings.summary_for(session, target.id)
 
     await message.answer(
         f"{'🚫 <b>BLOKLANGAN</b>' if target.is_blocked else '✅ Faol'}\n\n"
@@ -429,7 +455,7 @@ async def show_user_card(message: Message, session: AsyncSession, target: User) 
         f"📱 <code>{target.phone or '—'}</code>\n"
         f"📍 {target.region or '—'}\n"
         f"🎭 {role_name}\n"
-        f"📊 {target.reliability}\n"
+        f"📊 {target.reliability} · {ratings.line(summary)}\n"
         f"🎫 Bonus: {target.free_credits or 0} · 👥 chaqirgan: {target.invited_count or 0}\n"
         f"🆔 <code>{target.id}</code>\n\n"
         f"<b>So'nggi arizalar:</b>\n{lines}",
@@ -474,17 +500,25 @@ async def user_action(
     if action == "block":
         await svc.set_blocked(session, target, True)
         await call.answer("🚫 Bloklandi")
+        await audit.log_action(session, call.from_user.id, "user_block", target.mention)
     elif action == "unblock":
         await svc.set_blocked(session, target, False)
         await call.answer("✅ Blokdan chiqarildi")
+        await audit.log_action(session, call.from_user.id, "user_unblock", target.mention)
         try:
-            await bot.send_message(target.id, "✅ Hisobingiz qayta faollashtirildi.")
+            with use_lang(target.lang):
+                note = texts.ACCOUNT_UNBLOCKED
+            await bot.send_message(target.id, note)
         except Exception:
             pass
     elif action in ("mod", "unmod"):
         target.role = Role.MODERATOR if action == "mod" else Role.WORKER
         await session.commit()
         await call.answer("🛡 Moderator" if action == "mod" else "🗑 Moderator emas")
+        await audit.log_action(
+            session, call.from_user.id,
+            "user_mod" if action == "mod" else "user_unmod", target.mention,
+        )
         try:
             await bot.send_message(
                 target.id,
@@ -501,53 +535,7 @@ async def user_action(
     await show_user_card(call.message, session, target)
 
 
-@router.callback_query(WorkerCB.filter())
-async def worker_action(
-    call: CallbackQuery, callback_data: WorkerCB, session: AsyncSession, bot: Bot, user: User
-) -> None:
-    """Ish tugagach ishchini belgilash: chiqdi / chiqmadi / bloklash.
-
-    Bu reyting tizimining poydevori: keyingi safar chekni tasdiqlashda
-    adminga «3/5 ishga chiqqan» deb ko'rsatiladi.
-    """
-    from bot.db.models import Booking
-
-    booking = await session.get(Booking, callback_data.booking_id)
-    if booking is None:
-        await call.answer("Topilmadi", show_alert=True)
-        return
-    target = await session.get(User, booking.user_id)
-
-    if callback_data.action == "done":
-        await svc.mark_completed(session, booking)
-        await call.answer("✅ Belgilandi")
-        suffix = "✅ Ishga chiqdi"
-    elif callback_data.action == "noshow":
-        await svc.mark_no_show(session, booking)
-        await call.answer("🚷 Belgilandi")
-        suffix = "🚷 Ishga chiqmadi"
-        try:
-            await bot.send_message(
-                booking.user_id,
-                "🚷 Siz yozilgan ishga chiqmagansiz deb belgilandingiz.\n\n"
-                "Bu profilingizda ko'rinadi. Xato bo'lsa administratorga yozing.",
-            )
-        except Exception:
-            pass
-    else:
-        # Bloklash — jiddiy va qaytarish qiyin amal, faqat admin qiladi.
-        if not is_admin(user):
-            await call.answer("Bloklash faqat administrator qo'lidan keladi.", show_alert=True)
-            return
-        if target and target.id not in env.admins:
-            target.is_blocked = True
-            await session.commit()
-        await call.answer("🚫 Bloklandi")
-        suffix = "🚫 Bloklandi"
-
-    try:
-        await call.message.edit_text(
-            (call.message.text or "") + f"\n\n<b>{suffix}</b>", reply_markup=None
-        )
-    except Exception:
-        pass
+# Eslatma: WorkerCB (ishga chiqdi/chiqmadi/bloklash) handler'i endi
+# handlers/common.py da. Sababi: bu tugmalar ISH BERUVCHIGA ham yuboriladi
+# (davomat so'rovi), bu router esa faqat xodimlarga ochiq — ish beruvchi
+# bosganda hech narsa bo'lmasdi.

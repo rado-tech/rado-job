@@ -36,6 +36,7 @@ from bot.keyboards import (
     job_review_kb,
     jobs_list_kb,
     preview_kb,
+    publish_choice_kb,
     regions_kb,
     salaries_kb,
     skip_kb,
@@ -43,6 +44,7 @@ from bot.keyboards import (
     times_kb,
 )
 from bot.permissions import is_staff
+from bot.services import channels as ch
 from bot.services import jobs as svc
 from bot.services import publisher
 from bot.services import settings_store as store
@@ -503,7 +505,10 @@ async def confirm(
     await call.answer()
 
     if staff:
-        await publish_and_notify(bot, session, job, report_to=call.from_user.id)
+        # Kanal ulanmagan bo'lsa tanlov o'rniga darhol e'lon qilamiz —
+        # obunachilarga tarqatish baribir ishlaydi.
+        if not await offer_publish_choice(call.message, session, job, broadcast=True):
+            await publish_and_notify(bot, session, job, report_to=call.from_user.id)
     else:
         await call.message.answer(texts.NEW_JOB_SENT_TO_REVIEW)
         # Tasdiqlashni istalgan xodim qila oladi — admin band bo'lsa
@@ -515,18 +520,51 @@ async def confirm(
         )
 
 
-async def publish_and_notify(bot: Bot, session: AsyncSession, job: Job, *, report_to: int) -> None:
-    """Kanalga joylaydi va obunachilarga tarqatadi.
+async def offer_publish_choice(
+    message: Message, session: AsyncSession, job: Job, *, broadcast: bool
+) -> bool:
+    """Kanal tanlovini ko'rsatadi: mos / barcha / qo'lda / joylamaslik.
+
+    Kanal umuman ulanmagan bo'lsa tanlashning ma'nosi yo'q — False
+    qaytaradi, chaqiruvchi to'g'ridan-to'g'ri joylashga o'tadi.
+    """
+    active = await ch.all_channels(session, only_active=True)
+    if not active:
+        return False
+    matching = await ch.targets_for(session, job)
+    await message.answer(
+        f"📡 <b>E'lon <code>#{job.id}</code> qayerga joylansin?</b>\n\n"
+        f"Teglarga mos: <b>{len(matching)}</b> ta · Jami faol kanal: <b>{len(active)}</b> ta\n\n"
+        f"<i>«Mos kanallarga» — hudud/kasb filtri shu e'longa to'g'ri "
+        f"keladigan kanallarga. Filtri bo'sh kanal hammasini qabul qiladi.</i>",
+        reply_markup=publish_choice_kb(
+            job.id, len(matching), len(active), broadcast=broadcast
+        ),
+    )
+    return True
+
+
+async def publish_and_notify(
+    bot: Bot,
+    session: AsyncSession,
+    job: Job,
+    *,
+    report_to: int,
+    targets=None,  # noqa: ANN001 — Channel ro'yxati yoki None (teglar bo'yicha)
+    with_broadcast: bool = True,
+) -> None:
+    """Kanallarga joylaydi va (kerak bo'lsa) obunachilarga tarqatadi.
 
     Tarqatish uzoq davom etadi (minglab odam), shuning uchun uni FON rejimida
-    qo'yib yuboramiz — admin panel qotib turmaydi.
+    qo'yib yuboramiz — admin panel qotib turmaydi. Qayta joylashda
+    with_broadcast=False — obunachilarga ikkinchi marta xabar ketmaydi.
     """
     import asyncio
 
     from bot.services.notifier import broadcast_job
 
     lines = [f"{texts.NEW_JOB_PUBLISHED} <code>#{job.id}</code>"]
-    posted, errors = await publisher.publish_job(bot, session, job)
+    posted, errors = await publisher.publish_job(bot, session, job, targets=targets)
     if posted:
         lines.append(f"📢 {posted} ta kanalga joylandi.")
     elif not errors:
@@ -539,7 +577,8 @@ async def publish_and_notify(bot: Bot, session: AsyncSession, job: Job, *, repor
     except Exception:
         pass
 
-    asyncio.create_task(broadcast_job(bot, job.id, report_to))
+    if with_broadcast:
+        asyncio.create_task(broadcast_job(bot, job.id, report_to))
 
 
 # ================================================================ takrorlash

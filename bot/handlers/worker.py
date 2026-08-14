@@ -24,6 +24,7 @@ from bot.keyboards import (
     days_kb,
     feed_kb,
     job_view_kb,
+    rate_kb,
     regions_kb,
     report_kb,
 )
@@ -405,6 +406,15 @@ async def attendance_answer(
     except Exception:
         pass
     await call.message.answer(text)
+
+    # Ishga chiqqan bo'lsa — ish beruvchini baholashni taklif qilamiz.
+    # Bahoni faqat administratsiya ko'radi (sifat nazorati).
+    if callback_data.action == "yes":
+        job = await svc.get_job(session, booking.job_id)
+        if job is not None and job.created_by != user.id:
+            await call.message.answer(
+                texts.RATE_EMPLOYER_ASK, reply_markup=rate_kb("e", job.id)
+            )
 
 
 # ================================================================ shikoyat
