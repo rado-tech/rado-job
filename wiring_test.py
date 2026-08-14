@@ -40,13 +40,17 @@ from bot.callbacks import (  # noqa: E402
     AdminJobCB,
     AttendCB,
     ChanCB,
+    ChanListCB,
     ChatCB,
     FeedCB,
     JobCB,
     JobModCB,
+    LogCB,
     ModCB,
     JobEditCB,
     PickCB,
+    PubCB,
+    RateCB,
     RejCB,
     ReportCB,
     SetCB,
@@ -154,6 +158,7 @@ try:
     kb.reject_reasons_kb(1)
     kb.ad_channels_kb([channel], [])
     kb.ad_channels_kb([channel], [channel.id])
+    kb.ad_channels_kb([channel] * 25, [channel.id], page=1)
     kb.single_chat_kb("moderation", True)
     kb.single_chat_kb("backup", False)
     kb.edit_job_kb(1)
@@ -170,8 +175,16 @@ try:
     kb.settings_kb(free_mode=True)
     kb.settings_kb(free_mode=False)
     kb.channels_kb([channel])
+    kb.channels_kb([channel] * 45, page=2)
     kb.channel_kb(channel)
     kb.staff_kb([moderator])
+    kb.rate_kb("e", 999_999)
+    kb.rate_kb("w", 999_999)
+    kb.publish_choice_kb(999_999, 3, 45, broadcast=True)
+    kb.publish_choice_kb(999_999, 3, 45, broadcast=False)
+    kb.publish_pick_kb([channel] * 45, [channel.id], job_id=999_999, page=1)
+    kb.journal_kb(2, 55)
+    kb.worker_actions_kb(1, can_block=False)
     for u in (worker, employer, moderator, admin):
         kb.main_menu(u)
     kb.admin_menu(admin)
@@ -201,6 +214,11 @@ samples = {
     "PickCB": PickCB(field="njreg", value="Mirzo Ulug'bek").pack(),
     "RejCB": RejCB(key="notfound", booking_id=999_999).pack(),
     "JobEditCB": JobEditCB(field="description", job_id=999_999).pack(),
+    "RateCB": RateCB(kind="w", ref=999_999, stars=5).pack(),
+    "PubCB": PubCB(action="page", job_id=999_999, value=999).pack(),
+    "LogCB": LogCB(page=999).pack(),
+    "ChanListCB": ChanListCB(page=999).pack(),
+    "PickCB_page": PickCB(field="adch", value="__page_99__").pack(),
 }
 too_long = {name: len(v.encode()) for name, v in samples.items() if len(v.encode()) > 64}
 check("hammasi 64 baytdan kichik", not too_long, str(too_long) if too_long else "")
@@ -333,6 +351,35 @@ for path in pathlib.Path("bot").rglob("*.py"):
         if line.strip().startswith("from bot.texts import"):
             bad.append(f"{path}:{i}")
 check("texts dan to'g'ridan-to'g'ri import yo'q", not bad, ", ".join(bad))
+
+
+print("\n── Ishchi inline tugmalari va yangi matnlar tilga o'tadi")
+
+# Ilgari inline tugmalar («Yozilish», «Bekor qilish»…) o'zbekchaga qotib
+# qolgan edi — ruscha foydalanuvchi aralash interfeys ko'rardi.
+set_lang("ru")
+ru_apply = kb.job_view_kb(job, taken=2, mine=False, can_wait=True).inline_keyboard[0][0].text
+set_lang("uz")
+uz_apply = kb.job_view_kb(job, taken=2, mine=False, can_wait=True).inline_keyboard[0][0].text
+check("yozilish tugmasi ruscha", "Записаться" in ru_apply)
+check("yozilish tugmasi o'zbekcha", "Yozilish" in uz_apply)
+
+set_lang("ru")
+check("baho so'rovi ruscha", "Оцените" in texts_mod.RATE_EMPLOYER_ASK)
+check("bekor qilish xabari ruscha", "ОТМЕНЕНА" in texts_mod.job_cancelled_note(job, None))
+check("davomat tugmasi ruscha", "вышел" in texts_mod.BTN_ATT_YES)
+set_lang("uz")
+check("baho so'rovi o'zbekcha", "baholaysizmi" in texts_mod.RATE_EMPLOYER_ASK)
+
+# use_lang: fon xabarlari qabul qiluvchining tilida ketadi va kontekst
+# blokdan chiqqach avvalgi holiga qaytadi.
+from bot.i18n import current_lang, use_lang  # noqa: E402
+
+set_lang("uz")
+with use_lang("ru"):
+    inner = texts_mod.RATE_THANKS
+check("use_lang ichida ruscha", "Спасибо" in inner)
+check("use_lang dan keyin til qaytdi", current_lang() == "uz")
 
 
 print("\n── Parserlar")

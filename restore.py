@@ -14,6 +14,7 @@ MUHIM: bundan oldin botni to'xtating (Ctrl+C).
 
 from __future__ import annotations
 
+import gzip
 import os
 import shutil
 import sqlite3
@@ -38,7 +39,25 @@ def human_time(path: Path) -> str:
 def list_backups() -> list[Path]:
     if not BACKUP_DIR.exists():
         return []
-    return sorted(BACKUP_DIR.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = list(BACKUP_DIR.glob("*.db")) + list(BACKUP_DIR.glob("*.db.gz"))
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def unpack_if_gz(path: Path) -> Path:
+    """.gz nusxani vaqtincha ochib beradi, oddiy faylni o'zini qaytaradi.
+
+    Bot zaxiralarni siqib saqlaydi (Telegramning 50 MB chegarasi uchun).
+    Tiklashda esa SQLite'ga ochilgan fayl kerak.
+    """
+    if path.suffix != ".gz":
+        return path
+    out = path.with_name(path.name[:-3])  # rado_job-....db.gz -> .db
+    if out.exists():
+        out = out.with_name(f"unpacked-{out.name}")
+    with gzip.open(path, "rb") as fin, open(out, "wb") as fout:
+        shutil.copyfileobj(fin, fout)
+    print(f"📦 Ochildi: {path.name} -> {out.name}")
+    return out
 
 
 def verify(path: Path) -> tuple[bool, str]:
@@ -67,6 +86,12 @@ def main() -> None:
             print("  (yo'q) — bot hali zaxira olmagan.")
             return
         for path in backups:
+            if path.suffix == ".gz":
+                # Siqilgan nusxani ro'yxatda ochib o'tirmaymiz — tiklashda
+                # avtomat ochiladi va o'shanda tekshiriladi.
+                print(f"  📦 {path}  ·  {human_time(path)}  ·  {human_size(path)}")
+                print("      siqilgan (.gz) — tiklashda avtomat ochiladi")
+                continue
             ok, info = verify(path)
             mark = "✅" if ok else "❌"
             print(f"  {mark} {path}  ·  {human_time(path)}  ·  {human_size(path)}")
@@ -80,6 +105,7 @@ def main() -> None:
         print(f"❌ Fayl topilmadi: {source}")
         sys.exit(1)
 
+    source = unpack_if_gz(source)
     ok, info = verify(source)
     if not ok:
         print(f"❌ Bu nusxadan tiklab bo'lmaydi — {info}")

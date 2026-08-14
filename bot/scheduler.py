@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 
-from bot import texts
+from bot import fsm_storage, texts
 from bot.config import TZ
 from bot.db.base import SessionMaker
 from bot.services import backup, health, jobs as svc
@@ -58,6 +58,12 @@ async def run(bot: Bot) -> None:
             if now.hour >= BACKUP_HOUR and last_backup_day != today:
                 last_backup_day = today
                 await _daily_backup(bot, today)
+                # Zaxira bilan birga eski FSM qoldiqlarini ham tozalaymiz —
+                # 3 kun oldin tashlab ketilgan formalar hech kimga kerak emas.
+                async with SessionMaker() as session:
+                    removed = await fsm_storage.cleanup(session)
+                if removed:
+                    log.info("%s ta eski FSM holati tozalandi", removed)
 
             if now.hour >= REPORT_HOUR and last_report_day != today:
                 last_report_day = today
@@ -136,11 +142,11 @@ async def _daily_backup(bot: Bot, day: str) -> None:
     tushsa ham fayl kuniga BIR MARTA yuboriladi, spam bo'lmaydi.
     """
     async with SessionMaker() as session:
-        path = await backup.create_and_send(
+        path, sent_to = await backup.create_and_send(
             bot,
             session,
             caption=f"💾 Kunlik zaxira · {day}",
             min_hours_since_sent=20,
         )
     if path:
-        log.info("Kunlik zaxira tayyor: %s", path)
+        log.info("Kunlik zaxira tayyor: %s (%s)", path, sent_to)

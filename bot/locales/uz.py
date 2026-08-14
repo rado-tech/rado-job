@@ -964,3 +964,100 @@ ASK_CARD_HOLDER = "👤 Karta egasining ism-familiyasini yuboring."
 ASK_FEE = "🎫 Standart yozilish to'lovini yozing (so'mda).\n\n<i>Masalan: 10000</i>"
 ASK_HOLD = "⏳ Bron muddatini yozing (daqiqada, 3-120).\n\n<i>Masalan: 15</i>"
 SAVED = "✅ Saqlandi."
+
+
+# ---------------------------------------------------------------- inline tugmalar
+# Ishchi/ish beruvchi ko'radigan inline tugmalar. Reply tugmalardan farqli,
+# bular matn bo'yicha filtrlanmaydi — shuning uchun variantlar shart emas,
+# faqat joriy tildagi matn yetadi.
+
+BTN_CANCEL_BOOKING = "🚫 Bekor qilish"
+BTN_COMPLAIN = "🆘 Shikoyat"
+BTN_APPLY_FREE = "🆓 Bepul yozilish"
+BTN_APPLY = "✅ Yozilish"
+BTN_WAITLIST = "⏳ Navbatga yozilish (bepul)"
+BTN_TO_LIST = "⬅️ Ro'yxatga"
+BTN_CANCEL_YES = "✅ Ha, baribir bekor qilaman"
+BTN_CANCEL_NO = "⬅️ Yo'q, qoldiraman"
+BTN_ATT_YES = "✅ Ha, chiqdim"
+BTN_ATT_NO = "❌ Yo'q"
+BTN_MARK_DONE = "✅ Ishga chiqdi"
+BTN_MARK_NOSHOW = "🚷 Chiqmadi"
+BTN_MARK_BLOCK = "🚫 Bloklash"
+ALL_LABEL = "Barchasi"
+ALL_DAYS_LABEL = "Barcha kunlar"
+BTN_CLEAR_FILTER = "♻️ Filtrni tozalash"
+
+
+def btn_credit(n: int) -> str:
+    return f"🎁 Bonus bilan bepul ({n} ta)"
+
+
+# ---------------------------------------------------------------- baho
+
+RATE_EMPLOYER_ASK = (
+    "⭐ <b>Ish beruvchini baholaysizmi?</b>\n\n"
+    "1 dan 5 gacha baho bering. Bahoni faqat administratsiya ko'radi va "
+    "sifat nazorati uchun ishlatiladi."
+)
+RATE_WORKER_ASK = (
+    "⭐ <b>Ishchini baholaysizmi?</b>\n\n"
+    "1 dan 5 gacha. Bahoni faqat administratsiya ko'radi."
+)
+RATE_THANKS = "✅ Rahmat! Baho qabul qilindi."
+RATE_SKIPPED = "Baholanmadi."
+
+
+# ---------------------------------------------------------------- xabarnomalar
+
+NOSHOW_MARKED = (
+    "🚷 Siz yozilgan ishga chiqmagansiz deb belgilandingiz.\n\n"
+    "Bu profilingizda ko'rinadi. Xato bo'lsa administratorga yozing."
+)
+ACCOUNT_UNBLOCKED = "✅ Hisobingiz qayta faollashtirildi."
+NEW_JOB_BROADCAST_HEADER = "🆕 <b>Yangi ish e'loni!</b>"
+
+
+def job_approved(job: Job) -> str:
+    return f"✅ <b>«{job.title}»</b> e'loningiz tasdiqlandi va joylandi!"
+
+
+def job_declined(job: Job, reason: str | None) -> str:
+    text = f"❌ <b>«{job.title}»</b> e'loningiz rad etildi."
+    if reason:
+        text += f"\n\nSabab: <i>{reason}</i>"
+    return text
+
+
+def job_cancelled_note(job: Job, reason: str | None) -> str:
+    text = (
+        "❌ <b>ISH BEKOR QILINDI</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+    )
+    if reason:
+        text += f"Sabab: <i>{reason}</i>\n\n"
+    text += "❗️ <b>Ishga bormang.</b> Noqulaylik uchun uzr so'raymiz."
+    if job.fee > 0:
+        text += "\n\nTo'lov qilgan bo'lsangiz /shikoyat orqali yozing — qaytariladi."
+    return text
+
+
+def new_worker_note(job: Job, worker: User, taken: int) -> str:
+    return (
+        "👤 <b>Yangi ishchi yozildi</b>\n\n"
+        f"💼 {job.title}\n"
+        f"📅 {fmt_date(job.work_date)} · 🕗 {job.start_time}\n\n"
+        f"<b>{worker.full_name}</b>\n"
+        f"📱 <code>{worker.phone or '—'}</code>\n"
+        f"📊 {worker.reliability}\n\n"
+        f"👥 Jami: <b>{taken}/{job.slots_total}</b>"
+    )
+
+
+def attendance_author_intro(job: Job) -> str:
+    return (
+        f"📋 <b>«{job.title}» ishi tugadi.</b>\n\n"
+        "Kim chiqdi, kim chiqmadi — belgilab qo'ying. "
+        "Bu ishchilarning ishonchlilik ko'rsatkichiga yoziladi."
+    )

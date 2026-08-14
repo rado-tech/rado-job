@@ -15,7 +15,10 @@ Nusxa ikki joyga boradi:
 
 from __future__ import annotations
 
+import asyncio
+import gzip
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,22 +48,40 @@ def _db_path() -> Path | None:
     return Path(url.split("///", 1)[-1])
 
 
+def _gzip_file(src: Path, dst: Path) -> None:
+    with open(src, "rb") as fin, gzip.open(dst, "wb", compresslevel=6) as fout:
+        shutil.copyfileobj(fin, fout, length=1024 * 1024)
+
+
 async def create(stamp: str | None = None) -> Path | None:
-    """Zaxira nusxa yaratadi va yo'lini qaytaradi."""
+    """Zaxira nusxa yaratadi va yo'lini qaytaradi.
+
+    Nusxa .gz qilib SIQILADI — SQLite 5-8 barobar kichrayadi. Bu ikki
+    muammoni birdan yechadi: diskda joy tejaladi va Telegramning 50 MB
+    fayl chegarasiga yetish bir necha yilga uzoqlashadi (siqilmagan 50 MB
+    baza ~1 yilda yig'ilishi mumkin edi, siqilgani esa ~7 MB bo'ladi).
+    """
     if _db_path() is None:
         log.info("Zaxira o'tkazib yuborildi: baza SQLite emas (PostgreSQL'da pg_dump)")
         return None
 
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    target = backup_dir() / f"rado_job-{stamp}.db"
-    if target.exists():
-        target.unlink()
+    raw = backup_dir() / f"rado_job-{stamp}.db"
+    target = backup_dir() / f"rado_job-{stamp}.db.gz"
+    for old in (raw, target):
+        if old.exists():
+            old.unlink()
 
     # VACUUM INTO fayl yo'lini matn sifatida oladi. Windows'dagi teskari
     # chiziqlar SQL uchun muammo bermasligi uchun to'g'ri chiziqqa o'giramiz.
-    safe = str(target.resolve()).replace("\\", "/").replace("'", "''")
+    safe = str(raw.resolve()).replace("\\", "/").replace("'", "''")
     async with engine.connect() as conn:
         await conn.execute(text(f"VACUUM INTO '{safe}'"))
+
+    # Siqish diskka bog'liq ish — event loop'ni bloklamasligi uchun alohida
+    # oqimda bajaramiz (katta bazada bir necha soniya olishi mumkin).
+    await asyncio.to_thread(_gzip_file, raw, target)
+    raw.unlink()
 
     _prune()
     log.info("Zaxira nusxa: %s (%.1f KB)", target, target.stat().st_size / 1024)
@@ -74,8 +95,14 @@ async def create_and_send(
     stamp: str | None = None,
     caption: str = "💾 Zaxira nusxa",
     min_hours_since_sent: float = 0.0,
-) -> Path | None:
-    """Nusxa oladi va adminlarga Telegram orqali yuboradi.
+) -> tuple[Path | None, str]:
+    """Nusxa oladi va Telegram orqali yuboradi.
+
+    Qaytaradi: (fayl yo'li, qayerga ketgani):
+      "channel"  — zaxira kanaliga
+      "admins"   — adminlarga shaxsan (kanal ulanmagan yoki ishlamadi)
+      "skipped"  — yuborilmadi (yaqinda yuborilgan edi), faqat diskda
+      "none"     — hech qayerga yetmadi
 
     min_hours_since_sent — oxirgi yuborishdan shuncha soat o'tmagan bo'lsa
     yubormaydi (faqat diskka saqlaydi). Bu bot tez-tez qayta ishga
@@ -83,17 +110,18 @@ async def create_and_send(
     """
     path = await create(stamp)
     if path is None:
-        return None
+        return None, "none"
 
     if min_hours_since_sent > 0:
         since = _hours_since_sent()
         if since is not None and since < min_hours_since_sent:
             log.info("Zaxira yuborilmadi: oxirgisi %.1f soat oldin", since)
-            return path
+            return path, "skipped"
 
     size_kb = path.stat().st_size / 1024
     text_caption = f"{caption}\n{path.name} · {size_kb:.0f} KB"
-    sent = False
+    sent_to = "none"
+    channel_error: str | None = None
 
     # Alohida zaxira kanali bo'lsa — o'sha yerga. Shunda nusxalar oddiy
     # xabarlar orasida ko'milib ketmaydi va arxiv sifatida qidiriladi.
@@ -101,24 +129,40 @@ async def create_and_send(
     if target is not None:
         try:
             await bot.send_document(target, FSInputFile(path), caption=text_caption)
-            sent = True
+            sent_to = "channel"
         except Exception as e:
+            channel_error = str(e)[:200]
             log.warning("Zaxira kanaliga yuborilmadi: %s", e)
 
-    if not sent:
+    if sent_to == "none":
         for admin_id in settings.admins:
             try:
                 await bot.send_document(admin_id, FSInputFile(path), caption=text_caption)
-                sent = True
+                sent_to = "admins"
             except Exception as e:
                 log.warning("Zaxira adminga yuborilmadi (%s): %s", admin_id, e)
 
-    if sent:
+    # Kanal ULANGAN, lekin ishlamadi — bu jimgina o'tmasligi kerak: admin
+    # «kanalda arxiv yig'ilyapti» deb o'ylab yuradi, aslida esa yo'q.
+    if channel_error is not None:
+        note = (
+            "⚠️ <b>Zaxira kanalga yuborilmadi</b>\n\n"
+            f"Sabab: <code>{channel_error}</code>\n\n"
+            "Bot zaxira kanalida ADMIN ekanini va «Xabar joylash» huquqi "
+            "borligini tekshiring: ⚙️ Sozlamalar → 💾 Zaxira kanali → 🧪 Tekshirish"
+        )
+        for admin_id in settings.admins:
+            try:
+                await bot.send_message(admin_id, note)
+            except Exception:
+                pass
+
+    if sent_to != "none":
         await store.set_value(
             session, "last_backup_sent",
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
-    return path
+    return path, sent_to
 
 
 def _hours_since_sent() -> float | None:
@@ -135,7 +179,11 @@ def _hours_since_sent() -> float | None:
 
 
 def _prune() -> None:
-    files = sorted(backup_dir().glob("rado_job-*.db"))
+    # Eski (.db) va yangi (.db.gz) nusxalar bitta ro'yxatda, vaqt bo'yicha.
+    files = sorted(
+        list(backup_dir().glob("rado_job-*.db")) + list(backup_dir().glob("rado_job-*.db.gz")),
+        key=lambda p: p.stat().st_mtime,
+    )
     for old in files[:-KEEP]:
         try:
             old.unlink()
@@ -147,7 +195,10 @@ def latest() -> Path | None:
     folder = backup_dir()
     if not folder.exists():
         return None
-    files = sorted(folder.glob("*.db"), key=lambda p: p.stat().st_mtime)
+    files = sorted(
+        list(folder.glob("*.db")) + list(folder.glob("*.db.gz")),
+        key=lambda p: p.stat().st_mtime,
+    )
     return files[-1] if files else None
 
 

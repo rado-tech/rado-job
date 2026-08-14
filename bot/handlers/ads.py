@@ -30,7 +30,7 @@ from bot.config import CATEGORY_NAMES
 from bot.db.base import SessionMaker
 from bot.keyboards import BTN_ADS, ad_channels_kb, admin_menu, categories_kb, regions_kb
 from bot.permissions import IsAdmin
-from bot.services import broadcast, channels as ch, jobs as svc
+from bot.services import audit, broadcast, channels as ch, jobs as svc
 from bot.states import Ad
 
 log = logging.getLogger(__name__)
@@ -144,6 +144,7 @@ async def ad_pick_channels(
 ) -> None:
     data = await state.get_data()
     picked: list[int] = list(data.get("picked", []))
+    page = int(data.get("ad_page", 0))
 
     if callback_data.value == "__done__":
         if not picked:
@@ -154,15 +155,20 @@ async def ad_pick_channels(
         await _preview(call.message, state, session)
         return
 
-    cid = int(callback_data.value)
-    if cid in picked:
-        picked.remove(cid)
+    # Sahifalash: 40-50 kanal bitta ro'yxatga sig'maydi.
+    if callback_data.value.startswith("__page_"):
+        page = int(callback_data.value[7:-2])
+        await state.update_data(ad_page=page)
     else:
-        picked.append(cid)
-    await state.update_data(picked=picked)
+        cid = int(callback_data.value)
+        if cid in picked:
+            picked.remove(cid)
+        else:
+            picked.append(cid)
+        await state.update_data(picked=picked)
 
     items = await ch.all_channels(session, only_active=True)
-    await call.message.edit_reply_markup(reply_markup=ad_channels_kb(items, picked))
+    await call.message.edit_reply_markup(reply_markup=ad_channels_kb(items, picked, page))
     await call.answer()
 
 
@@ -259,10 +265,18 @@ async def ad_confirm(
     await call.answer("🚀 Boshlandi")
 
     if data["mode"] in ("channels", "pickch"):
+        await audit.log_action(
+            session, call.from_user.id, "ad_sent",
+            "kanallarga" if data["mode"] == "channels" else "tanlangan kanallarga",
+        )
         await _send_to_channels(bot, session, data, call.from_user.id)
         return
 
     await call.message.answer("📤 Tarqatish boshlandi. Yakunida hisobot yuboraman.")
+    await audit.log_action(
+        session, call.from_user.id, "ad_sent",
+        f"{len(data.get('user_ids', []))} ta foydalanuvchiga",
+    )
     # Fon rejimida — admin panel qotib turmaydi.
     asyncio.create_task(_run(bot, data, call.from_user.id))
 

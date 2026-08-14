@@ -49,14 +49,21 @@ async def _render(session: AsyncSession, job: Job) -> tuple[str, bool]:
 
 # ================================================================ joylash
 
-async def publish_job(bot: Bot, session: AsyncSession, job: Job) -> tuple[int, list[str]]:
-    """E'lonni unga mos BARCHA kanallarga joylaydi.
+async def publish_job(
+    bot: Bot, session: AsyncSession, job: Job, targets: list[Channel] | None = None
+) -> tuple[int, list[str]]:
+    """E'lonni kanallarga joylaydi.
+
+    targets=None — teglarga (hudud/kasb filtrlariga) mos kanallar avtomat
+    tanlanadi. Ro'yxat berilsa — aynan o'shalarga (moderator «barchaga»
+    yoki qo'lda tanlaganida).
 
     Qaytaradi: (nechta kanalga joylandi, xatolar ro'yxati).
     Bitta kanal ishlamasa qolganlari baribir joylanadi — hammasi
     to'xtab qolmaydi.
     """
-    targets = await ch.targets_for(session, job)
+    if targets is None:
+        targets = await ch.targets_for(session, job)
     if not targets:
         return 0, []
 

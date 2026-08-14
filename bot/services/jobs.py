@@ -1058,14 +1058,16 @@ async def audience(
     return list((await session.scalars(select(User.id).where(*conditions))).all())
 
 
-async def subscribers_for_job(session: AsyncSession, job: Job) -> list[int]:
-    """Yangi e'lon haqida kimga xabar berish kerak.
+async def subscribers_for_job(session: AsyncSession, job: Job) -> list[tuple[int, str]]:
+    """Yangi e'lon haqida kimga xabar berish kerak: (id, til) juftliklari.
 
     Shartlar: bloklanmagan, botni o'chirmagan, xabarnomani yoqib qo'ygan,
     hududi mos (yoki "Boshqa hudud" tanlagan) va kasbga obuna bo'lgan
     (yoki umuman kasb tanlamagan — unda hammasi keladi).
+
+    Til ham qaytariladi: tarqatishda matn har guruhga o'z tilida yasaladi.
     """
-    stmt = select(User.id).where(
+    stmt = select(User.id, User.lang).where(
         User.is_blocked.is_(False),
         User.is_active.is_(True),
         User.notify.is_(True),
@@ -1074,7 +1076,7 @@ async def subscribers_for_job(session: AsyncSession, job: Job) -> list[int]:
         or_(User.region == job.region, User.region == "Boshqa hudud"),
         or_(User.categories == "", User.categories.like(f"%|{job.category}|%")),
     )
-    return list((await session.scalars(stmt)).all())
+    return [(int(uid), lang or "uz") for uid, lang in (await session.execute(stmt)).all()]
 
 
 # ================================================================ ichki

@@ -20,14 +20,18 @@ from bot.callbacks import (
     AdminJobCB,
     AttendCB,
     ChanCB,
+    ChanListCB,
     EditCB,
     FeedCB,
     JobCB,
     JobEditCB,
     JobModCB,
+    LogCB,
     ModCB,
     NavCB,
     PickCB,
+    PubCB,
+    RateCB,
     RejCB,
     ReportCB,
     SetCB,
@@ -169,6 +173,22 @@ def skip_kb(field: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def _page_nav(kb: InlineKeyboardBuilder, *, page: int, total: int, per_page: int, make) -> None:  # noqa: ANN001
+    """◀️ 2/5 ▶️ qatori. `make(p)` — sahifa tugmasining callback matni."""
+    pages = max((total + per_page - 1) // per_page, 1)
+    if pages <= 1:
+        return
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=make(page - 1)))
+    nav.append(
+        InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data=NavCB(to="noop").pack())
+    )
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=make(page + 1)))
+    kb.row(*nav)
+
+
 # ---------------------------------------------------------------- ro'yxatdan o'tish
 
 def role_kb() -> InlineKeyboardMarkup:
@@ -263,21 +283,21 @@ def feed_kb(
     # Filtr holati tugmalarda ko'rinib turadi — odam nima yoqilganini biladi
     kb.row(
         InlineKeyboardButton(
-            text=f"📍 {region or 'Barchasi'}",
+            text=f"📍 {region or texts.ALL_LABEL}",
             callback_data=FeedCB(action="filter", value="region").pack(),
         ),
         InlineKeyboardButton(
-            text=f"🧰 {category or 'Barchasi'}",
+            text=f"🧰 {category or texts.ALL_LABEL}",
             callback_data=FeedCB(action="filter", value="category").pack(),
         ),
     )
     kb.row(
         InlineKeyboardButton(
-            text=f"📅 {day or 'Barcha kunlar'}",
+            text=f"📅 {day or texts.ALL_DAYS_LABEL}",
             callback_data=FeedCB(action="filter", value="day").pack(),
         ),
         InlineKeyboardButton(
-            text="♻️ Filtrni tozalash", callback_data=FeedCB(action="reset").pack()
+            text=texts.BTN_CLEAR_FILTER, callback_data=FeedCB(action="reset").pack()
         ),
     )
     return kb.as_markup()
@@ -285,7 +305,7 @@ def feed_kb(
 
 def days_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🌐 Barcha kunlar", callback_data=PickCB(field="fday", value="*").pack())
+    kb.button(text=f"🌐 {texts.ALL_DAYS_LABEL}", callback_data=PickCB(field="fday", value="*").pack())
     today = local_today()
     for i in range(7):
         d = today + timedelta(days=i)
@@ -308,33 +328,38 @@ def job_view_kb(
 
     if confirmed:
         kb.button(
-            text="🚫 Bekor qilish", callback_data=JobCB(action="cancel", job_id=job.id).pack()
+            text=texts.BTN_CANCEL_BOOKING,
+            callback_data=JobCB(action="cancel", job_id=job.id).pack(),
         )
         kb.button(
-            text="🆘 Shikoyat", callback_data=JobCB(action="report", job_id=job.id).pack()
+            text=texts.BTN_COMPLAIN, callback_data=JobCB(action="report", job_id=job.id).pack()
         )
     elif mine:
         kb.button(
-            text="🚫 Bekor qilish",
+            text=texts.BTN_CANCEL_BOOKING,
             callback_data=JobCB(action="cancel", job_id=job.id).pack(),
         )
     elif job.status == JobStatus.OPEN and free > 0:
-        label = "🆓 Bepul yozilish" if job.fee <= 0 else f"✅ Yozilish · {texts.money(job.fee)}"
+        label = (
+            texts.BTN_APPLY_FREE
+            if job.fee <= 0
+            else f"{texts.BTN_APPLY} · {texts.money(job.fee)}"
+        )
         kb.button(text=label, callback_data=JobCB(action="apply", job_id=job.id).pack())
         # Bonus bor va e'lon pulli — tanlov beramiz, avtomat sarflamaymiz.
         # Odam bonusini qaysi ishga ishlatishni o'zi hal qilsin.
         if job.fee > 0 and credits > 0:
             kb.button(
-                text=f"🎁 Bonus bilan bepul ({credits} ta)",
+                text=texts.btn_credit(credits),
                 callback_data=JobCB(action="credit", job_id=job.id).pack(),
             )
     elif can_wait and job.status in (JobStatus.OPEN, JobStatus.FULL):
         kb.button(
-            text="⏳ Navbatga yozilish (bepul)",
+            text=texts.BTN_WAITLIST,
             callback_data=JobCB(action="wait", job_id=job.id).pack(),
         )
 
-    kb.button(text="⬅️ Ro'yxatga", callback_data=NavCB(to="feed").pack())
+    kb.button(text=texts.BTN_TO_LIST, callback_data=NavCB(to="feed").pack())
     kb.adjust(1)
     return kb.as_markup()
 
@@ -342,19 +367,29 @@ def job_view_kb(
 def cancel_confirm_kb(job_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(
-        text="✅ Ha, baribir bekor qilaman",
+        text=texts.BTN_CANCEL_YES,
         callback_data=JobCB(action="cancelyes", job_id=job_id).pack(),
     )
-    kb.button(text="⬅️ Yo'q, qoldiraman", callback_data=JobCB(action="view", job_id=job_id).pack())
+    kb.button(text=texts.BTN_CANCEL_NO, callback_data=JobCB(action="view", job_id=job_id).pack())
     kb.adjust(1)
     return kb.as_markup()
 
 
 def attendance_kb(booking_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Ha, chiqdim", callback_data=AttendCB(action="yes", booking_id=booking_id).pack())
-    kb.button(text="❌ Yo'q", callback_data=AttendCB(action="no", booking_id=booking_id).pack())
+    kb.button(text=texts.BTN_ATT_YES, callback_data=AttendCB(action="yes", booking_id=booking_id).pack())
+    kb.button(text=texts.BTN_ATT_NO, callback_data=AttendCB(action="no", booking_id=booking_id).pack())
     kb.adjust(2)
+    return kb.as_markup()
+
+
+def rate_kb(kind: str, ref: int) -> InlineKeyboardMarkup:
+    """1-5 baho. kind: "e" — ish beruvchiga, "w" — ishchiga."""
+    kb = InlineKeyboardBuilder()
+    for n in range(1, 6):
+        kb.button(text=f"{n}⭐", callback_data=RateCB(kind=kind, ref=ref, stars=n).pack())
+    kb.button(text=texts.BTN_SKIP, callback_data=RateCB(kind=kind, ref=ref, stars=0).pack())
+    kb.adjust(5, 1)
     return kb.as_markup()
 
 
@@ -613,12 +648,17 @@ def jobs_list_kb(jobs: list[Job]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def worker_actions_kb(booking_id: int) -> InlineKeyboardMarkup:
+def worker_actions_kb(booking_id: int, *, can_block: bool = True) -> InlineKeyboardMarkup:
+    """Ishchini belgilash. Ish beruvchiga bloklash tugmasi ko'rsatilmaydi —
+    u baribir ishlamaydi (faqat admin bloklaydi) va faqat chalg'itadi."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Ishga chiqdi", callback_data=WorkerCB(action="done", booking_id=booking_id).pack())
-    kb.button(text="🚷 Chiqmadi", callback_data=WorkerCB(action="noshow", booking_id=booking_id).pack())
-    kb.button(text="🚫 Bloklash", callback_data=WorkerCB(action="block", booking_id=booking_id).pack())
-    kb.adjust(2, 1)
+    kb.button(text=texts.BTN_MARK_DONE, callback_data=WorkerCB(action="done", booking_id=booking_id).pack())
+    kb.button(text=texts.BTN_MARK_NOSHOW, callback_data=WorkerCB(action="noshow", booking_id=booking_id).pack())
+    if can_block:
+        kb.button(text=texts.BTN_MARK_BLOCK, callback_data=WorkerCB(action="block", booking_id=booking_id).pack())
+        kb.adjust(2, 1)
+    else:
+        kb.adjust(2)
     return kb.as_markup()
 
 
@@ -638,8 +678,9 @@ def settings_kb(free_mode: bool = False) -> InlineKeyboardMarkup:
     kb.button(text="🎫 Standart to'lov", callback_data=SetCB(action="fee").pack())
     kb.button(text="⏳ Bron muddati", callback_data=SetCB(action="hold").pack())
     kb.button(text="🚷 No-show limiti", callback_data=SetCB(action="noshow").pack())
+    kb.button(text="📋 Jurnal", callback_data=SetCB(action="journal").pack())
     kb.button(text="💾 Zaxira nusxa olish", callback_data=SetCB(action="backup").pack())
-    kb.adjust(1, 2, 2, 2, 2, 1, 1)
+    kb.adjust(1, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -663,9 +704,18 @@ def single_chat_kb(kind: str, connected: bool) -> InlineKeyboardMarkup:
 
 # ---------------------------------------------------------------- kanallar
 
-def channels_kb(channels: list[Channel]) -> InlineKeyboardMarkup:
+CHANNELS_PER_PAGE = 10
+
+
+def channels_kb(channels: list[Channel], page: int = 0) -> InlineKeyboardMarkup:
+    """Kanallar ro'yxati — 10 tadan sahifalab.
+
+    40-50 kanal ulanganida bitta uzun ro'yxat ekranga sig'may, tugmalar
+    orasidan kerakli kanalni topish qiynalardi.
+    """
     kb = InlineKeyboardBuilder()
-    for c in channels:
+    start = page * CHANNELS_PER_PAGE
+    for c in channels[start : start + CHANNELS_PER_PAGE]:
         mark = "🟢" if c.is_active else "⚪️"
         scope = []
         if c.region_list:
@@ -674,15 +724,82 @@ def channels_kb(channels: list[Channel]) -> InlineKeyboardMarkup:
             scope.append(f"{len(c.category_list)} kasb")
         tail = f" · {', '.join(scope)}" if scope else " · barchasi"
         kb.button(
-            text=f"{mark} {c.title or c.chat_id}{tail}",
+            text=f"{mark} {c.title or c.chat_id}{tail}"[:60],
             callback_data=ChanCB(action="view", channel_id=c.id).pack(),
         )
     kb.adjust(1)
+    _page_nav(
+        kb,
+        page=page,
+        total=len(channels),
+        per_page=CHANNELS_PER_PAGE,
+        make=lambda p: ChanListCB(page=p).pack(),
+    )
     kb.row(
         InlineKeyboardButton(
             text="➕ Kanal/guruh qo'shish", callback_data=SetCB(action="channel").pack()
         )
     )
+    return kb.as_markup()
+
+
+def publish_choice_kb(
+    job_id: int, matching: int, total: int, *, broadcast: bool
+) -> InlineKeyboardMarkup:
+    """E'lonni qayerga joylashni tanlash.
+
+    Standart yo'l — «mos kanallarga» (kanal teglari bo'yicha). «Barchaga»
+    va «qo'lda tanlash» maxsus holatlar uchun: masalan shoshilinch ish
+    hamma kanalda chiqsin yoki aksincha faqat bitta tuman kanalida.
+    """
+    bc = 1 if broadcast else 0
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text=f"📤 Mos kanallarga ({matching} ta)",
+        callback_data=PubCB(action="auto", job_id=job_id, value=bc).pack(),
+    )
+    kb.button(
+        text=f"📢 Barcha kanallarga ({total} ta)",
+        callback_data=PubCB(action="all", job_id=job_id, value=bc).pack(),
+    )
+    kb.button(text="🗂 Qo'lda tanlash", callback_data=PubCB(action="pick", job_id=job_id, value=bc).pack())
+    kb.button(text="🚫 Kanalga joylamaslik", callback_data=PubCB(action="skip", job_id=job_id, value=bc).pack())
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def publish_pick_kb(
+    channels: list[Channel], picked: list[int], *, job_id: int, page: int
+) -> InlineKeyboardMarkup:
+    """Qo'lda kanal tanlash — ko'p tanlovli, 10 tadan sahifalab."""
+    kb = InlineKeyboardBuilder()
+    start = page * CHANNELS_PER_PAGE
+    for c in channels[start : start + CHANNELS_PER_PAGE]:
+        mark = "✅ " if c.id in picked else "▫️ "
+        kb.button(
+            text=(mark + (c.title or str(c.chat_id)))[:60],
+            callback_data=PubCB(action="t", job_id=job_id, value=c.id).pack(),
+        )
+    kb.adjust(1)
+    _page_nav(
+        kb,
+        page=page,
+        total=len(channels),
+        per_page=CHANNELS_PER_PAGE,
+        make=lambda p: PubCB(action="page", job_id=job_id, value=p).pack(),
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=f"📨 Yuborish ({len(picked)} ta)",
+            callback_data=PubCB(action="done", job_id=job_id).pack(),
+        )
+    )
+    return kb.as_markup()
+
+
+def journal_kb(page: int, total: int, per_page: int = 10) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    _page_nav(kb, page=page, total=total, per_page=per_page, make=lambda p: LogCB(page=p).pack())
     return kb.as_markup()
 
 
@@ -732,16 +849,24 @@ def category_options() -> list[tuple[str, str]]:
 
 # ---------------------------------------------------------------- xodimlar
 
-def ad_channels_kb(items: list[Channel], picked: list[int]) -> InlineKeyboardMarkup:
-    """Reklama uchun kanal tanlash (ko'p tanlovli)."""
+def ad_channels_kb(items: list[Channel], picked: list[int], page: int = 0) -> InlineKeyboardMarkup:
+    """Reklama uchun kanal tanlash (ko'p tanlovli, 10 tadan sahifalab)."""
     kb = InlineKeyboardBuilder()
-    for c in items:
+    start = page * CHANNELS_PER_PAGE
+    for c in items[start : start + CHANNELS_PER_PAGE]:
         mark = "✅ " if c.id in picked else "▫️ "
         kb.button(
-            text=mark + (c.title or str(c.chat_id)),
+            text=(mark + (c.title or str(c.chat_id)))[:60],
             callback_data=PickCB(field="adch", value=str(c.id)).pack(),
         )
     kb.adjust(1)
+    _page_nav(
+        kb,
+        page=page,
+        total=len(items),
+        per_page=CHANNELS_PER_PAGE,
+        make=lambda p: PickCB(field="adch", value=f"__page_{p}__").pack(),
+    )
     kb.row(
         InlineKeyboardButton(
             text=f"✔️ Tayyor ({len(picked)} ta)",

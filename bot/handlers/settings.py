@@ -20,8 +20,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.callbacks import ChanCB, ChatCB, PickCB, SetCB, StaffCB
-from bot.config import CATEGORY_NAMES
+from bot.callbacks import ChanCB, ChanListCB, ChatCB, LogCB, PickCB, SetCB, StaffCB
+from bot.config import CATEGORY_NAMES, TZ
 from bot.db.base import integrity_check
 from bot.db.models import STAFF_ROLES, Channel, JobPost, Role, User
 from bot.keyboards import (
@@ -31,13 +31,14 @@ from bot.keyboards import (
     category_options,
     channel_kb,
     channels_kb,
+    journal_kb,
     multi_pick_kb,
     region_options,
     settings_kb,
     staff_kb,
 )
 from bot.permissions import IsAdmin, is_owner
-from bot.services import backup, channels as ch, health, jobs as svc, publisher
+from bot.services import audit, backup, channels as ch, health, jobs as svc, publisher
 from bot.services import settings_store as store
 from bot.states import Setup
 from bot.utils import parse_int
@@ -101,7 +102,12 @@ async def settings_action(
 
     if action == "backup":
         await call.answer("Zaxira olinyapti…")
-        await do_backup(call.message, session)
+        await do_backup(call.message, session, staff_id=call.from_user.id)
+        return
+
+    if action == "journal":
+        await show_journal(call.message, session, page=0)
+        await call.answer()
         return
 
     # --- bitta chat: moderatsiya guruhi va zaxira kanali
@@ -147,6 +153,10 @@ async def settings_action(
             return
         await store.set_value(session, "free_mode", "1" if turning_on else "0")
         await call.answer("✅ O'zgartirildi")
+        await audit.log_action(
+            session, call.from_user.id, "freemode",
+            "yoqildi" if turning_on else "o'chirildi",
+        )
         await call.message.answer(texts.free_mode_switched(turning_on))
         await call.message.answer(await _view(session), reply_markup=settings_kb(turning_on))
         return
@@ -171,15 +181,31 @@ async def settings_action(
 
 # ================================================================ kanallar
 
-async def show_channels(message: Message, session: AsyncSession) -> None:
+async def show_channels(
+    message: Message, session: AsyncSession, *, page: int = 0, edit: bool = False
+) -> None:
     items = await ch.all_channels(session)
     if not items:
         await message.answer(texts.CHANNELS_EMPTY, reply_markup=channels_kb([]))
         return
     active = sum(1 for c in items if c.is_active)
-    await message.answer(
-        texts.channels_view(len(items), active), reply_markup=channels_kb(items)
-    )
+    text = texts.channels_view(len(items), active)
+    kb = channels_kb(items, page=page)
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(ChanListCB.filter())
+async def channels_page(
+    call: CallbackQuery, callback_data: ChanListCB, session: AsyncSession
+) -> None:
+    await show_channels(call.message, session, page=callback_data.page, edit=True)
+    await call.answer()
 
 
 async def show_channel(message: Message, session: AsyncSession, channel_id: int) -> None:
@@ -213,13 +239,23 @@ async def channel_view_cb(call: CallbackQuery, callback_data: ChanCB, session: A
 async def channel_toggle(call: CallbackQuery, callback_data: ChanCB, session: AsyncSession) -> None:
     channel = await ch.toggle(session, callback_data.channel_id)
     await call.answer("✅ O'zgartirildi" if channel else "Topilmadi")
+    if channel:
+        await audit.log_action(
+            session, call.from_user.id, "channel_toggle",
+            channel.title or str(channel.chat_id),
+            "yoqildi" if channel.is_active else "to'xtatildi",
+        )
     await show_channel(call.message, session, callback_data.channel_id)
 
 
 @router.callback_query(ChanCB.filter(F.action == "del"))
 async def channel_delete(call: CallbackQuery, callback_data: ChanCB, session: AsyncSession) -> None:
+    channel = await session.get(Channel, callback_data.channel_id)
+    title = (channel.title or str(channel.chat_id)) if channel else ""
     await ch.remove(session, callback_data.channel_id)
     await call.answer("🗑 O'chirildi")
+    if title:
+        await audit.log_action(session, call.from_user.id, "channel_del", title)
     await show_channels(call.message, session)
 
 
@@ -351,6 +387,9 @@ async def add_channel(
     channel = await ch.add(session, int(chat_id), title, kind)
     await state.set_state(None)
     await message.answer(f"✅ Qo'shildi: <b>{channel.title}</b>", reply_markup=admin_menu())
+    await audit.log_action(
+        session, message.from_user.id, "channel_add", channel.title or str(channel.chat_id)
+    )
     await message.answer(await publisher.test_channel(bot, session, channel))
     await show_channel(message, session, channel.id)
 
@@ -557,6 +596,10 @@ async def use_chat(
             title, kind = "", "channel"
         channel = await ch.add(session, callback_data.chat_id, title, kind)
         await call.answer("✅ Qo'shildi")
+        await audit.log_action(
+            session, call.from_user.id, "channel_add",
+            channel.title or str(channel.chat_id),
+        )
         await call.message.answer(await publisher.test_channel(bot, session, channel))
         await show_channel(call.message, session, channel.id)
         return
@@ -619,6 +662,7 @@ async def add_staff(message: Message, state: FSMContext, session: AsyncSession, 
     await session.commit()
     await state.set_state(None)
     await message.answer(f"✅ {target.mention} endi <b>moderator</b>.", reply_markup=admin_menu())
+    await audit.log_action(session, message.from_user.id, "user_mod", target.mention)
 
     try:
         await bot.send_message(
@@ -647,6 +691,7 @@ async def demote_staff(
     target.role = Role.WORKER
     await session.commit()
     await call.answer("🗑 O'chirildi")
+    await audit.log_action(session, call.from_user.id, "user_unmod", target.mention)
     try:
         await bot.send_message(target.id, "ℹ️ Moderator huquqingiz olib tashlandi.")
     except Exception:
@@ -672,24 +717,83 @@ async def mod_command(message: Message, command, session: AsyncSession, bot: Bot
     if target.role == Role.MODERATOR:
         target.role = Role.WORKER
         note = "🗑 moderator emas"
+        action = "user_unmod"
     else:
         target.role = Role.MODERATOR
         note = "🛡 moderator"
+        action = "user_mod"
     await session.commit()
     await message.answer(f"{target.mention} → {note}")
+    await audit.log_action(session, message.from_user.id, action, target.mention)
+
+
+# ================================================================ jurnal
+
+JOURNAL_PER_PAGE = 10
+
+
+async def show_journal(
+    message: Message, session: AsyncSession, *, page: int = 0, edit: bool = False
+) -> None:
+    """Moderator harakatlari jurnali — 10 tadan, oxirgisi tepada."""
+    rows, total = await audit.recent(
+        session, offset=page * JOURNAL_PER_PAGE, limit=JOURNAL_PER_PAGE
+    )
+    if not rows:
+        text = "📋 Jurnal bo'sh — hali hech qanday xodim harakati yozilmagan."
+        kb = None
+    else:
+        ids = {r.staff_id for r in rows}
+        found = (await session.scalars(select(User).where(User.id.in_(ids)))).all()
+        names = {u.id: (u.full_name or f"id{u.id}") for u in found}
+        lines = []
+        for r in rows:
+            when = r.created_at.astimezone(TZ).strftime("%d.%m %H:%M")
+            line = (
+                f"🕐 {when} · <b>{names.get(r.staff_id, r.staff_id)}</b> — "
+                f"{audit.label(r.action)}"
+            )
+            if r.target:
+                line += f" · {r.target}"
+            if r.details:
+                line += f"\n      <i>{r.details[:90]}</i>"
+            lines.append(line)
+        text = f"📋 <b>Xodimlar jurnali</b> — jami <b>{total}</b> ta yozuv\n\n" + "\n".join(lines)
+        kb = journal_kb(page, total, JOURNAL_PER_PAGE)
+
+    if edit:
+        try:
+            await message.edit_text(text[:4000], reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await message.answer(text[:4000], reply_markup=kb)
+
+
+@router.callback_query(LogCB.filter())
+async def journal_nav(
+    call: CallbackQuery, callback_data: LogCB, session: AsyncSession
+) -> None:
+    await show_journal(call.message, session, page=callback_data.page, edit=True)
+    await call.answer()
+
+
+@router.message(Command("jurnal"))
+async def journal_command(message: Message, session: AsyncSession) -> None:
+    await show_journal(message, session)
 
 
 # ================================================================ zaxira
 
-async def do_backup(message: Message, session: AsyncSession) -> None:
-    """Qo'lda zaxira olish.
+async def do_backup(message: Message, session: AsyncSession, staff_id: int | None = None) -> None:
+    """Qo'lda zaxira olish — bitta tugma, nusxa zaxira kanaliga.
 
-    Nusxa ZAXIRA KANALIGA yuboriladi (ulangan bo'lsa), aks holda
-    adminlarga shaxsan. Ilgari u shunchaki tugmani bosgan odamning
-    chatiga tushardi — ya'ni avtomat zaxiradan boshqacha joyga.
+    Qayerga KETGANINI taxmin qilmaymiz — create_and_send haqiqiy natijani
+    qaytaradi. Ilgari «kanalga yuborildi» deb yozilar, kanal ishlamasa esa
+    fayl jimgina adminlarga tushardi va odam chalg'irdi.
     """
     try:
-        path = await backup.create_and_send(
+        path, sent_to = await backup.create_and_send(
             message.bot,
             session,
             caption="💾 <b>Zaxira nusxa</b> (qo'lda olindi)",
@@ -705,15 +809,28 @@ async def do_backup(message: Message, session: AsyncSession) -> None:
 
     where = store.get("backup_chat_title") or store.get("backup_chat_id")
     size_kb = path.stat().st_size / 1024
-    await message.answer(
-        f"✅ <b>Zaxira tayyor</b> — {path.name} · {size_kb:.0f} KB\n\n"
-        + (f"📨 Yuborildi: <b>{where}</b>" if where else "📨 Yuborildi: adminlarga")
-    )
+    head = f"✅ <b>Zaxira tayyor</b> — {path.name} · {size_kb:.0f} KB\n\n"
+    if sent_to == "channel":
+        tail = f"📨 Yuborildi: <b>{where}</b>"
+    elif sent_to == "admins" and where:
+        # Kanal ulangan-u, yuborib bo'lmadi — sababi alohida xabarda keladi.
+        tail = "⚠️ Kanalga yuborilmadi — fayl <b>adminlarga</b> yuborildi."
+    elif sent_to == "admins":
+        tail = (
+            "📨 Yuborildi: adminlarga\n\n"
+            "💡 Zaxira kanal ulasangiz nusxalar bitta arxiv-kanalda "
+            "yig'iladi: ⚙️ Sozlamalar → 💾 Zaxira kanali"
+        )
+    else:
+        tail = "⚠️ Telegramga yuborilmadi — fayl faqat serverdagi diskda qoldi."
+    await message.answer(head + tail)
+    if staff_id is not None:
+        await audit.log(session, staff_id, "backup", path.name)
 
 
 @router.message(Command("backup"))
 async def backup_command(message: Message, session: AsyncSession) -> None:
-    await do_backup(message, session)
+    await do_backup(message, session, staff_id=message.from_user.id)
 
 
 @router.message(Command("health"))
