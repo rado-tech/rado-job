@@ -30,6 +30,7 @@ from bot.callbacks import (
     ModCB,
     NavCB,
     PickCB,
+    ProfCB,
     PubCB,
     RateCB,
     RejCB,
@@ -383,6 +384,31 @@ def attendance_kb(booking_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def profile_kb(user: User) -> InlineKeyboardMarkup:
+    """Profil ostidagi tugmalar — buyruq yozish shart bo'lmasin.
+
+    Ishchi va ish beruvchi turli tugmalar ko'radi: xabarnoma va
+    qiziqishlar faqat ishchiga tegishli.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.button(text=texts.BTN_P_LANG, callback_data=ProfCB(action="lang").pack())
+    kb.button(text=texts.BTN_P_REGION, callback_data=ProfCB(action="region").pack())
+    if user.role == Role.WORKER:
+        kb.button(text=texts.BTN_P_CATS, callback_data=ProfCB(action="cats").pack())
+        kb.button(
+            text=texts.BTN_P_NOTIFY_ON if user.notify else texts.BTN_P_NOTIFY_OFF,
+            callback_data=ProfCB(action="notify").pack(),
+        )
+    kb.button(text=texts.BTN_P_INVITE, callback_data=ProfCB(action="invite").pack())
+    kb.button(text=texts.BTN_P_COMPLAIN, callback_data=ProfCB(action="complain").pack())
+    # Xodimning roli almashmaydi — tugmani ko'rsatishning ma'nosi yo'q.
+    if not is_staff(user):
+        kb.button(text=texts.BTN_P_ROLE, callback_data=ProfCB(action="role").pack())
+    kb.button(text=texts.BTN_P_HELP, callback_data=ProfCB(action="help").pack())
+    kb.adjust(2, 2, 2, 2)
+    return kb.as_markup()
+
+
 def rate_kb(kind: str, ref: int) -> InlineKeyboardMarkup:
     """1-5 baho. kind: "e" — ish beruvchiga, "w" — ishchiga."""
     kb = InlineKeyboardBuilder()
@@ -679,8 +705,12 @@ def settings_kb(free_mode: bool = False) -> InlineKeyboardMarkup:
     kb.button(text="⏳ Bron muddati", callback_data=SetCB(action="hold").pack())
     kb.button(text="🚷 No-show limiti", callback_data=SetCB(action="noshow").pack())
     kb.button(text="📋 Jurnal", callback_data=SetCB(action="journal").pack())
+    # Ilgari faqat /health va /hisobot buyruqlari orqali ochilardi — ularni
+    # bilish uchun README o'qish kerak edi.
+    kb.button(text="🩺 Bot holati", callback_data=SetCB(action="health").pack())
+    kb.button(text="📈 Kunlik hisobot", callback_data=SetCB(action="report").pack())
     kb.button(text="💾 Zaxira nusxa olish", callback_data=SetCB(action="backup").pack())
-    kb.adjust(1, 2, 2, 2, 2, 2, 1)
+    kb.adjust(1, 2, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 

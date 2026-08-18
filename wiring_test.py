@@ -49,12 +49,15 @@ from bot.callbacks import (  # noqa: E402
     ModCB,
     JobEditCB,
     PickCB,
+    ProfCB,
     PubCB,
     RateCB,
     RejCB,
     ReportCB,
     SetCB,
     StaffCB,
+    UserCB,
+    UsersCB,
     WorkerCB,
 )
 from bot.db.models import Channel, Job, JobStatus, Role, User  # noqa: E402
@@ -195,6 +198,50 @@ except Exception as e:  # noqa: BLE001
     ok, detail = False, f"{type(e).__name__}: {e}"
 check("barcha klaviaturalar yasaldi", ok, detail)
 
+# Yuqoridagilarni QAYTA yasab, lug'atga yig'amiz — pastdagi qadoqlash-ochish
+# tekshiruvi aynan shu haqiqiy tugmalar ustida ishlaydi.
+KEYBOARDS = {
+    "role": kb.role_kb(), "lang": kb.lang_kb(),
+    "regions": kb.regions_kb("rregion"), "cats_multi": kb.categories_multi_kb([]),
+    "cats": kb.categories_kb("njcat"),
+    "feed": kb.feed_kb([(job, 1)], page=1, total=40, per_page=8,
+                       region="", category="", day=""),
+    "days": kb.days_kb(), "dates": kb.dates_kb("njdate"), "times": kb.times_kb(),
+    "salaries": kb.salaries_kb(), "slots": kb.slots_kb(), "fee": kb.fee_kb(10_000),
+    "skip": kb.skip_kb("njloc"),
+    "job_view": kb.job_view_kb(job, taken=1, mine=False, can_wait=True, credits=2),
+    "job_view_mine": kb.job_view_kb(job, taken=1, mine=True, can_wait=False),
+    "job_view_conf": kb.job_view_kb(job, taken=1, mine=True, can_wait=False, confirmed=True),
+    "job_view_full": kb.job_view_kb(job, taken=5, mine=False, can_wait=True),
+    "cancel_confirm": kb.cancel_confirm_kb(1), "attendance": kb.attendance_kb(1),
+    "rate_e": kb.rate_kb("e", 1), "rate_w": kb.rate_kb("w", 1),
+    "preview_admin": kb.preview_kb(is_admin=True),
+    "preview_emp": kb.preview_kb(is_admin=False),
+    "moderation": kb.moderation_kb(1), "reject": kb.reject_reasons_kb(1),
+    "undo": kb.undo_kb(1), "job_review": kb.job_review_kb(1),
+    "admin_job": kb.admin_job_kb(job), "admin_job_free": kb.admin_job_kb(free_job),
+    "admin_job_owner": kb.admin_job_kb(job, owner_view=True),
+    "edit_job": kb.edit_job_kb(1), "jobs_list": kb.jobs_list_kb([job]),
+    "worker_actions": kb.worker_actions_kb(1),
+    "worker_actions_nb": kb.worker_actions_kb(1, can_block=False),
+    "settings": kb.settings_kb(True),
+    "single_on": kb.single_chat_kb("moderation", True),
+    "single_off": kb.single_chat_kb("backup", False),
+    "channels": kb.channels_kb([channel] * 25, page=1),
+    "channel": kb.channel_kb(channel),
+    "pick_reg": kb.multi_pick_kb("chreg", kb.region_options(), []),
+    "pick_cat": kb.multi_pick_kb("chcat", kb.category_options(), ["yuk"]),
+    "ad_channels": kb.ad_channels_kb([channel] * 25, [1], page=1),
+    "users": kb.users_list_kb([worker], page=1, total=30, per_page=10, only_blocked=False),
+    "user_card": kb.user_card_kb(worker, is_owner_account=False),
+    "staff": kb.staff_kb([moderator]), "report": kb.report_kb(1),
+    "profile_worker": kb.profile_kb(worker), "profile_employer": kb.profile_kb(employer),
+    "profile_staff": kb.profile_kb(moderator),
+    "publish_choice": kb.publish_choice_kb(1, 2, 5, broadcast=True),
+    "publish_pick": kb.publish_pick_kb([channel] * 25, [1], job_id=1, page=1),
+    "journal": kb.journal_kb(1, 55),
+}
+
 
 print("\n── Callback ma'lumoti Telegram chegarasida (64 bayt)")
 
@@ -222,6 +269,44 @@ samples = {
 }
 too_long = {name: len(v.encode()) for name, v in samples.items() if len(v.encode()) > 64}
 check("hammasi 64 baytdan kichik", not too_long, str(too_long) if too_long else "")
+
+
+print()
+print("── Har bir tugma qadoqlanib, QAYTA OCHILADI")
+
+# Nega alohida tekshiruv? CallbackData'ni qadoqlash har doim ishlaydi, lekin
+# OCHISH yiqilishi mumkin: ixtiyoriy matn maydoni bo'sh bo'lsa, o'rtadagi
+# bo'lak None bo'lib qaytadi va turi `str` bo'lsa pydantic uni rad etadi.
+# Aynan shu «♻️ Filtrni tozalash» va sahifalash tugmalarini jimgina
+# buzib qo'ygan edi: tugma bosilardi -> «⚠️ Xatolik yuz berdi».
+#
+# Shuning uchun kod emas, HAQIQIY klaviaturalar tekshiriladi.
+CB_CLASSES = [
+    AdminJobCB, AttendCB, ChanCB, ChanListCB, ChatCB, FeedCB, JobCB, JobEditCB,
+    JobModCB, LogCB, ModCB, PickCB, ProfCB, PubCB, RateCB, RejCB, ReportCB,
+    SetCB, StaffCB, UserCB, UsersCB, WorkerCB,
+]
+BY_PREFIX = {c.__prefix__: c for c in CB_CLASSES}
+
+broken, unpacked = [], 0
+for kb_name, markup in KEYBOARDS.items():
+    for row in markup.inline_keyboard:
+        for btn in row:
+            data = btn.callback_data
+            if not data:
+                continue
+            if len(data.encode()) > 64:
+                broken.append(f"{kb_name}/{btn.text}: 64 bayt oshdi")
+                continue
+            cls = BY_PREFIX.get(data.split(":", 1)[0])
+            if cls is None:
+                continue  # NavCB va boshqalar — ro'yxatda bo'lmasa o'tkazamiz
+            try:
+                cls.unpack(data)
+                unpacked += 1
+            except Exception as e:  # noqa: BLE001
+                broken.append(f"{kb_name}/«{btn.text}» ({data}): {type(e).__name__}")
+check(f"{unpacked} ta tugma qayta ochildi", not broken, "; ".join(broken[:5]))
 
 
 print("\n── Maxfiylik")
@@ -380,6 +465,70 @@ with use_lang("ru"):
     inner = texts_mod.RATE_THANKS
 check("use_lang ichida ruscha", "Спасибо" in inner)
 check("use_lang dan keyin til qaytdi", current_lang() == "uz")
+
+
+print()
+print("── Har bir tugmaning HANDLERI bormi (o'lik tugma yo'qmi)")
+
+# Tugma bosilib hech narsa bo'lmasligi — eng yomon xato turi: foydalanuvchi
+# botni buzuq deb o'ylaydi, jurnalda esa hech qanday iz qolmaydi.
+# Shuning uchun HAQIQIY klaviaturalardagi har bir callback uchun mos
+# handler borligi tekshiriladi. Ruxsat (IsAdmin) va holat filtrlari
+# hisobga olinmaydi — ular tugmani o'lik qilmaydi, faqat kimga va qachon
+# ishlashini cheklaydi.
+from datetime import datetime as _dt  # noqa: E402
+
+from aiogram.types import CallbackQuery as _CB  # noqa: E402
+from aiogram.types import Chat as _Chat  # noqa: E402
+from aiogram.types import Message as _Msg  # noqa: E402
+from aiogram.types import User as _TgUser  # noqa: E402
+
+
+def _cb_handlers(r):  # noqa: ANN001
+    out = list(r.callback_query.handlers)
+    for sub in r.sub_routers:
+        out += _cb_handlers(sub)
+    return out
+
+
+async def _find_dead():
+    handlers = _cb_handlers(root)
+    chat = _Chat(id=2, type='private')
+    dead, seen = [], 0
+    for kb_name, markup in KEYBOARDS.items():
+        for row in markup.inline_keyboard:
+            for btn in row:
+                if not btn.callback_data:
+                    continue
+                seen += 1
+                msg = _Msg(message_id=1, date=_dt.now(), chat=chat, text='x')
+                cb = _CB(id='1', from_user=_TgUser(id=2, is_bot=False, first_name='U'),
+                         chat_instance='ci', data=btn.callback_data, message=msg)
+                found = False
+                for h in handlers:
+                    flts = [f for f in (h.filters or [])
+                            if type(f.callback).__name__ == 'CallbackQueryFilter']
+                    if not flts:
+                        continue
+                    ok = True
+                    for f in flts:
+                        try:
+                            r = await f.callback(cb)
+                        except Exception:  # noqa: BLE001
+                            r = False
+                        if not r:
+                            ok = False
+                            break
+                    if ok:
+                        found = True
+                        break
+                if not found:
+                    dead.append(kb_name + '/' + btn.text + ' -> ' + btn.callback_data)
+    return seen, dead
+
+
+_seen, _dead = asyncio.run(_find_dead())
+check(str(_seen) + " ta tugmaning handleri bor", not _dead, '; '.join(_dead[:4]))
 
 
 print("\n── Parserlar")

@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import texts
-from bot.callbacks import NavCB, PickCB, RateCB, WorkerCB
+from bot.callbacks import NavCB, PickCB, ProfCB, RateCB, WorkerCB
 from bot.config import CATEGORY_NAMES, settings as env
 from bot.db.models import Booking, BookingStatus, Job, Role, User
 from bot.i18n import LANGS, set_lang, use_lang
@@ -18,6 +18,7 @@ from bot.keyboards import (
     lang_kb,
     main_menu,
     phone_kb,
+    profile_kb,
     rate_kb,
     regions_kb,
     role_kb,
@@ -28,7 +29,8 @@ from bot.permissions import is_admin, is_staff
 from bot.services import audit, jobs as svc
 from bot.services import ratings
 from bot.services import settings_store as store
-from bot.states import Reg
+from bot.states import Reg, ReportFlow
+from bot import tg
 
 router = Router(name="common")
 
@@ -130,8 +132,8 @@ async def pick_role(
         user.role = Role.EMPLOYER if callback_data.value == "employer" else Role.WORKER
         await session.commit()
 
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer()
+    await tg.edit_markup(call.message, None)
+    await tg.answer_cb(call)
 
     # Allaqachon ro'yxatdan o'tgan bo'lsa — telefonni QAYTA so'ramaymiz.
     # Ilgari /rol bosgan odamdan raqam yana so'ralardi: keraksiz va chalkash.
@@ -146,6 +148,11 @@ async def pick_role(
         return
 
     intro = texts.START_EMPLOYER if callback_data.value == "employer" else texts.START_WORKER
+    # Bu HAQIQIY ro'yxatdan o'tish. Profil orqali hudud/kasb o'zgartirilganda
+    # ham xuddi shu holatlar ishlatiladi — belgisiz ikkalasi aralashib
+    # ketardi va sozlamani o'zgartirgan odam «Tayyor! Birinchi e'loningizni
+    # joylang» degan mos kelmaydigan xabarni ko'rardi.
+    await state.update_data(reg_flow=True)
     await state.set_state(Reg.phone)
     await call.message.answer(intro, reply_markup=phone_kb())
 
@@ -187,7 +194,11 @@ async def got_region(
     await call.message.edit_text(f"📍 Hudud: <b>{callback_data.value}</b>")
     await call.answer()
 
-    if user.role == Role.EMPLOYER:
+    data = await state.get_data()
+    # Profil orqali FAQAT hududni o'zgartirmoqchi bo'lgan odamdan qiziqishlar
+    # ham so'ralishi kerak emas — u so'ramagan savolga javob berib o'tiradi.
+    # Qiziqishlar ketma-ketligi faqat ro'yxatdan o'tishda mantiqiy.
+    if user.role == Role.EMPLOYER or not data.get("reg_flow"):
         await _finish_registration(call.message, state, session, user)
         return
 
@@ -203,23 +214,31 @@ async def pick_categories(
     session: AsyncSession, user: User
 ) -> None:
     if callback_data.value == "__done__":
-        await call.message.edit_reply_markup(reply_markup=None)
-        await call.answer()
+        await tg.edit_markup(call.message, None)
+        await tg.answer_cb(call)
         await _finish_registration(call.message, state, session, user)
         return
 
     await svc.toggle_category(session, user, callback_data.value)
-    await call.message.edit_reply_markup(reply_markup=categories_multi_kb(user.category_keys))
-    await call.answer()
+    await tg.edit_markup(call.message, categories_multi_kb(user.category_keys))
+    await tg.answer_cb(call)
 
 
 async def _finish_registration(
     message: Message, state: FSMContext, session: AsyncSession, user: User
 ) -> None:
     data = await state.get_data()
+    was_registration = bool(data.get("reg_flow"))
     await state.clear()
 
-    text = texts.REGISTERED_EMPLOYER if user.role == Role.EMPLOYER else texts.REGISTERED_WORKER
+    if was_registration:
+        text = (
+            texts.REGISTERED_EMPLOYER if user.role == Role.EMPLOYER
+            else texts.REGISTERED_WORKER
+        )
+    else:
+        # Profil orqali sozlama o'zgartirildi — tabriklash o'rinsiz.
+        text = texts.SETTINGS_SAVED
     await message.answer(text, reply_markup=main_menu(user))
 
     if job_id := data.get("pending_job"):
@@ -259,19 +278,12 @@ async def profile(message: Message, state: FSMContext, user: User) -> None:
     text += (
         f"🌐 Til: <b>{LANGS.get(user.lang, LANGS['uz'])}</b>\n"
         f"\nID: <code>{user.id}</code>\n\n"
-        f"/til — tilni o'zgartirish\n"
-        f"/dost — do'st chaqirib bonus olish\n"
-        f"/hudud — hududni o'zgartirish\n"
-        f"/kasb — qiziqishlarni o'zgartirish\n"
-        f"/xabar — xabarnomani yoqish/o'chirish\n"
-        f"/shikoyat — muammo yoki savol\n"
-        f"/rol — rolni almashtirish"
+        f"{texts.PROFILE_HINT}"
     )
-    await message.answer(text)
+    await message.answer(text, reply_markup=profile_kb(user))
 
 
-@router.message(Command("dost"))
-async def referral(message: Message, user: User) -> None:
+async def show_referral(message: Message, user: User) -> None:
     reward = store.referral_reward()
     if reward <= 0:
         await message.answer("Hozircha referal dasturi o'chirilgan.")
@@ -280,6 +292,11 @@ async def referral(message: Message, user: User) -> None:
     await message.answer(
         texts.referral_info(link, user.invited_count, user.free_credits, reward)
     )
+
+
+@router.message(Command("dost"))
+async def referral(message: Message, user: User) -> None:
+    await show_referral(message, user)
 
 
 @router.message(Command("hudud"))
@@ -296,8 +313,7 @@ async def change_categories(message: Message, state: FSMContext, user: User) -> 
     )
 
 
-@router.message(Command("xabar"))
-async def toggle_notify(message: Message, session: AsyncSession, user: User) -> None:
+async def do_toggle_notify(message: Message, session: AsyncSession, user: User) -> None:
     user.notify = not user.notify
     await session.commit()
     # Aniq yozamiz: bu FAQAT yangi e'lon tarqatmasini o'chiradi. Shaxsiy
@@ -319,6 +335,11 @@ async def toggle_notify(message: Message, session: AsyncSession, user: User) -> 
         )
 
 
+@router.message(Command("xabar"))
+async def toggle_notify(message: Message, session: AsyncSession, user: User) -> None:
+    await do_toggle_notify(message, session, user)
+
+
 @router.message(Command("rol"))
 async def change_role(message: Message, state: FSMContext, user: User) -> None:
     if is_staff(user):
@@ -326,6 +347,78 @@ async def change_role(message: Message, state: FSMContext, user: User) -> None:
         return
     await state.set_state(Reg.role)
     await message.answer(texts.CHOOSE_ROLE, reply_markup=role_kb())
+
+
+# ================================================================ profil tugmalari
+
+@router.callback_query(ProfCB.filter())
+async def profile_action(
+    call: CallbackQuery, callback_data: ProfCB, state: FSMContext,
+    session: AsyncSession, user: User
+) -> None:
+    """Profil ostidagi tugmalar.
+
+    Har biri o'sha buyruq bajaradigan ishni qiladi — mantiq takrorlanmasin
+    deb umumiy funksiyalar chaqiriladi. Amal bajarilgach profil QAYTA
+    ko'rsatilmaydi: odam nima o'zgarganini xabar matnidan ko'radi va
+    kerak bo'lsa «👤 Profil» ni yana bosadi.
+    """
+    action = callback_data.action
+    msg = call.message
+
+    if action == "lang":
+        await tg.answer_cb(call)
+        await msg.answer("Tilni tanlang / Выберите язык", reply_markup=lang_kb())
+        return
+
+    if action == "region":
+        await state.set_state(Reg.region)
+        await tg.answer_cb(call)
+        await msg.answer(texts.ASK_REGION, reply_markup=regions_kb("rregion"))
+        return
+
+    if action == "cats":
+        await state.set_state(Reg.categories)
+        await tg.answer_cb(call)
+        await msg.answer(
+            texts.ASK_CATEGORIES, reply_markup=categories_multi_kb(user.category_keys)
+        )
+        return
+
+    if action == "notify":
+        await do_toggle_notify(msg, session, user)
+        await tg.answer_cb(call, "🔔" if user.notify else "🔕")
+        # Tugma yozuvi holatga qarab o'zgaradi — darhol yangilaymiz.
+        await tg.edit_markup(msg, profile_kb(user))
+        return
+
+    if action == "invite":
+        await tg.answer_cb(call)
+        await show_referral(msg, user)
+        return
+
+    if action == "complain":
+        await state.set_state(ReportFlow.text)
+        await state.update_data(report_job_id=None)
+        await tg.answer_cb(call)
+        await msg.answer(texts.ASK_REPORT)
+        return
+
+    if action == "role":
+        if is_staff(user):
+            await tg.answer_cb(call, "Siz xodimsiz — rol o'zgarmaydi.", alert=True)
+            return
+        await state.set_state(Reg.role)
+        await tg.answer_cb(call)
+        await msg.answer(texts.CHOOSE_ROLE, reply_markup=role_kb())
+        return
+
+    if action == "help":
+        await tg.answer_cb(call)
+        await msg.answer(help_text(user))
+        return
+
+    await tg.answer_cb(call)
 
 
 # ================================================================ navigatsiya
@@ -348,32 +441,45 @@ async def nav_noop(call: CallbackQuery) -> None:
     await call.answer()
 
 
-@router.message(Command("help"))
-async def cmd_help(message: Message, user: User) -> None:
+def help_text(user: User) -> str:
+    """Yordam matni.
+
+    Buyruqlar ro'yxati emas, QISQA yo'l-yo'riq: kundalik ishlarning
+    hammasi tugmalar orqali qilinadi. Buyruqlar faqat zaxira usul —
+    klaviatura yo'qolib qolsa yoki tez o'tish kerak bo'lsa.
+    """
     text = (
         "ℹ️ <b>Yordam</b>\n\n"
-        "/start — boshlash\n"
-        "/ishlar — ochiq e'lonlar\n"
-        "/mening — mening ishlarim\n"
-        "/profil — profil\n"
-        "/til — til / язык\n"
-        "/dost — do'st chaqirib bonus olish\n"
-        "/kasb — qiziqishlar\n"
-        "/xabar — xabarnomani yoqish/o'chirish\n"
-        "/shikoyat — muammo yoki savol\n"
+        "Hamma narsa <b>tugmalar</b> orqali:\n\n"
+        "🔎 <b>Ish qidirish</b> — ochiq e'lonlar\n"
+        "📋 <b>Mening ishlarim</b> — yozilgan ishlaringiz\n"
+        "👤 <b>Profil</b> — til, hudud, qiziqishlar, xabarnoma, "
+        "do'st chaqirish, shikoyat\n\n"
+        "<i>Tugmalar ko'rinmasa /start bosing.</i>\n\n"
+        "Tez buyruqlar: /start /ishlar /mening /profil /til /shikoyat"
     )
+    if is_staff(user):
+        text += (
+            "\n\n🛠 <b>Xodim</b>\n"
+            "/admin — panel · /newjob — yangi e'lon\n"
+            "/pending — kutayotgan cheklar · /review — tasdiq kutayotgan e'lonlar\n"
+            "/murojaat — shikoyatlar · /jobs — barcha e'lonlar\n"
+            "/cancel — jarayonni bekor qilish · /id — chat ID si"
+        )
     if user.id in env.admins:
         text += (
-            "\n🛠 <b>Admin</b>\n"
-            "/newjob — yangi e'lon\n"
-            "/pending — kutayotgan to'lovlar\n"
-            "/review — tasdiq kutayotgan e'lonlar\n"
-            "/stats — statistika\n"
-            "/sozlama — sozlamalar\n"
-            "/cancel — jarayonni bekor qilish\n"
-            "/id — shu chat ID si"
+            "\n\n👑 <b>Admin</b>\n"
+            "/sozlama — sozlamalar · /users — foydalanuvchilar\n"
+            "/stats — statistika · /hisobot — kunlik hisobot\n"
+            "/reklama — tarqatish · /jurnal — xodimlar jurnali\n"
+            "/health — bot holati · /backup — zaxira nusxa · /mod — moderator"
         )
-    await message.answer(text)
+    return text
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message, user: User) -> None:
+    await message.answer(help_text(user))
 
 
 @router.message(Command("id"))

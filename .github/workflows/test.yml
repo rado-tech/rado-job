@@ -43,6 +43,11 @@ jobs:
         # Joy hisobi, navbat, bron muddati, bepul rejim, referal, shikoyat
         run: python smoke_test.py
 
+      - name: Oqim testi
+        # Tugma bosilganda zanjir oxirigacha ishlaydimi (handler'lar
+        # haqiqatan chaqiriladi, Telegram o'rniga soxta yuboruvchi)
+        run: python flow_test.py
+
       - name: Maxfiy ma'lumot sizib chiqmaganini tekshirish
         # .env yoki baza tasodifan git'ga tushib qolmasin
         run: |

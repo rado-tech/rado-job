@@ -247,6 +247,12 @@ beriladi — bot o'lik kanalga urinib vaqt sarflamaydi.
 | 🛡 Moderator tayinlash | ❌ | ✅ |
 | 📋 Xodimlar jurnali | ❌ | ✅ |
 
+**Buyruq emas, tugma.** Kundalik ishlarning hammasi tugmalar orqali:
+`👤 Profil` ostida til, hudud, qiziqishlar, xabarnoma, do'st chaqirish,
+shikoyat va rol tugmalari bor. `⚙️ Sozlamalar` ichida jurnal, bot holati va
+kunlik hisobot. Buyruqlar (`/til`, `/kasb`, `/health`…) ishlashda davom
+etadi — lekin ularni bilish shart emas.
+
 **Jurnal.** Har muhim harakat (chek tasdiqlash/rad, e'lon tasdiqlash,
 tahrirlash, bloklash, kanal qo'shish, reklama, zaxira…) **kim** qilgani
 bilan yozib boriladi: `⚙️ Sozlamalar` → `📋 Jurnal` yoki `/jurnal`.
@@ -552,7 +558,20 @@ beruvchi oqimi, baho, jurnal, FSM saqlanishi, zaxira siqilishi.
 ```
 
 Yig'ilish testi: importlar, tugmalar, 64-bayt callback chegarasi,
-maxfiylik, ikki tillilik. Ikkalasi ham CI'da har push'da ishlaydi.
+maxfiylik, ikki tillilik. Bundan tashqari **har bir tugmani qadoqlab-ochib**
+va **handleri borligini** tekshiradi — «bosdim, hech narsa bo'lmadi»
+turidagi xatolar shu yerda ushlanadi.
+
+```bash
+.venv\Scripts\python.exe flow_test.py
+```
+
+Oqim testi: handler'larni HAQIQATAN chaqiradi (Telegram o'rniga soxta
+yuboruvchi). Tugma bosilganda zanjir oxirigacha ishlashini tekshiradi:
+kanal filtri, lenta sahifalash, profil tugmalari, kanalga joylash tanlovi,
+to'lov ko'rsatmasi tili, ruxsatlar.
+
+Uchalasi ham CI'da har push'da ishlaydi.
 
 ---
 

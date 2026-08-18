@@ -31,10 +31,20 @@ class ReportCB(CallbackData, prefix="rp"):
 
 
 class FeedCB(CallbackData, prefix="f"):
-    """Ishchi ro'yxatidagi navigatsiya va filtr."""
+    """Ishchi ro'yxatidagi navigatsiya va filtr.
+
+    DIQQAT: `value` ixtiyoriy, shuning uchun turi `str | None`.
+    Ilgari u `str = ""` edi va bu jimgina buzuq tugmalar yasardi:
+    FeedCB(action="reset") -> "f:reset::0" bo'lib qadoqlanardi, lekin
+    ochilayotganda o'rtadagi bo'sh bo'lak None bo'lib qaytadi va pydantic
+    uni `str` deb qabul qilmasdi. Natijada «♻️ Filtrni tozalash» va
+    sahifalash tugmalari HAR DOIM «Xatolik yuz berdi» berardi.
+
+    Shu sabab wiring_test barcha tugmalarni qadoqlab-ochib tekshiradi.
+    """
 
     action: str  # page | filter | setreg | setcat | setday | reset | open
-    value: str = ""
+    value: str | None = None
     page: int = 0
 
 
@@ -166,6 +176,17 @@ class ChanListCB(CallbackData, prefix="chl"):
     """Kanallar ro'yxatini varaqlash (40-50 kanal sig'ishi uchun)."""
 
     page: int = 0
+
+
+class ProfCB(CallbackData, prefix="pr"):
+    """Profil sozlamalari tugmalari.
+
+    Ilgari bu amallar faqat buyruq orqali ishlardi (/til, /kasb, /dost…):
+    odam profil matnidagi ro'yxatni o'qib, buyruqni QO'LDA yozishi kerak
+    edi. Telefonda bu noqulay va ko'pchilik topmasdi ham.
+    """
+
+    action: str  # lang | region | cats | notify | invite | complain | role | help
 
 
 class NavCB(CallbackData, prefix="n"):

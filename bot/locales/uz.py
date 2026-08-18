@@ -1061,3 +1061,23 @@ def attendance_author_intro(job: Job) -> str:
         "Kim chiqdi, kim chiqmadi — belgilab qo'ying. "
         "Bu ishchilarning ishonchlilik ko'rsatkichiga yoziladi."
     )
+
+
+# ---------------------------------------------------------------- profil tugmalari
+# Ilgari bu amallar faqat BUYRUQ orqali ishlardi (/til, /kasb, /dost…) va
+# ularni profil matnidan o'qib, qo'lda yozish kerak edi. Telefonda bu
+# noqulay va ko'pchilik umuman topmasdi.
+
+BTN_P_LANG = "🌐 Til"
+BTN_P_REGION = "📍 Hudud"
+BTN_P_CATS = "🧰 Qiziqishlar"
+BTN_P_NOTIFY_ON = "🔔 Xabarnoma: yoqilgan"
+BTN_P_NOTIFY_OFF = "🔕 Xabarnoma: o'chirilgan"
+BTN_P_INVITE = "🎁 Do'st chaqirish"
+BTN_P_COMPLAIN = "🆘 Shikoyat"
+BTN_P_ROLE = "🔄 Rolni almashtirish"
+BTN_P_HELP = "ℹ️ Yordam"
+
+PROFILE_HINT = "Quyidagi tugmalar orqali o'zgartirasiz 👇"
+
+SETTINGS_SAVED = "✅ Saqlandi."
