@@ -218,6 +218,15 @@ async def main() -> None:
     await _announce_start(bot, gap, startup_warnings)
 
     task = asyncio.create_task(scheduler.run(bot))
+
+    # Bazani tiklashdan keyin bot o'zini qayta ko'tarishi kerak: fayl
+    # almashtirildi, xotiradagi sozlamalar keshi esa eskisiga tegishli.
+    def _request_stop() -> None:
+        log.warning("To'xtatish so'raldi (baza tiklandi) — qayta ishga tushamiz.")
+        asyncio.create_task(dp.stop_polling())
+
+    runtime.stop_bot = _request_stop
+
     try:
         await dp.start_polling(bot)
     finally:

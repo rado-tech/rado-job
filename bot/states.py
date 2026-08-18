@@ -66,6 +66,8 @@ class Setup(StatesGroup):
     add_staff = State()
     channel_regions = State()
     channel_categories = State()
+    # Zaxira faylini kutish (bazani tiklash)
+    restore_file = State()
 
 
 class Ad(StatesGroup):
