@@ -44,6 +44,7 @@ ACTION_LABEL: dict[str, str] = {
     "channel_toggle": "⏯ kanal holatini o'zgartirdi",
     "ad_sent": "📣 reklama yubordi",
     "backup": "💾 zaxira oldi",
+    "restore": "♻️ BAZANI TIKLADI",
     "freemode": "🆓 bepul rejimni o'zgartirdi",
     "report_answer": "✍️ murojaatga javob berdi",
     "report_close": "✅ murojaatni yopdi",

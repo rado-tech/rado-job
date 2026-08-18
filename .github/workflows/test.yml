@@ -48,6 +48,11 @@ jobs:
         # haqiqatan chaqiriladi, Telegram o'rniga soxta yuboruvchi)
         run: python flow_test.py
 
+      - name: Tiklash testi
+        # Zaxiradan bazani qaytarish: tekshiruv, yaroqsiz fayllarni rad
+        # etish, ma'lumot haqiqatan qaytishi
+        run: python restore_test.py
+
       - name: Maxfiy ma'lumot sizib chiqmaganini tekshirish
         # .env yoki baza tasodifan git'ga tushib qolmasin
         run: |

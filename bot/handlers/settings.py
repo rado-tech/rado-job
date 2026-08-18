@@ -10,6 +10,7 @@ guruh supergruppaga aylangani, `-100` prefiksini unutish) yo'qoladi.
 from __future__ import annotations
 
 import logging
+import pathlib
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -19,8 +20,17 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot import texts
-from bot.callbacks import ChanCB, ChanListCB, ChatCB, LogCB, PickCB, SetCB, StaffCB
+from bot import runtime, texts
+from bot.callbacks import (
+    ChanCB,
+    ChanListCB,
+    ChatCB,
+    LogCB,
+    PickCB,
+    RestoreCB,
+    SetCB,
+    StaffCB,
+)
 from bot.config import CATEGORY_NAMES, TZ
 from bot.db.base import integrity_check
 from bot.db.models import STAFF_ROLES, Channel, JobPost, Role, User
@@ -34,11 +44,12 @@ from bot.keyboards import (
     journal_kb,
     multi_pick_kb,
     region_options,
+    restore_confirm_kb,
     settings_kb,
     staff_kb,
 )
 from bot.permissions import IsAdmin, is_owner
-from bot.services import audit, backup, channels as ch, health, jobs as svc, publisher
+from bot.services import audit, backup, channels as ch, dbrestore, health, jobs as svc, publisher
 from bot.services import settings_store as store
 from bot.states import Setup
 from bot import tg
@@ -77,6 +88,23 @@ async def _view(session: AsyncSession) -> str:
     )
 
 
+# ================================================================ bazani tiklash
+
+# Faqat EGASI (.env dagi ADMIN_IDS). Moderator ham, keyin tayinlangan
+# admin ham qila olmaydi: bu butun bazani almashtiradigan amal.
+
+RESTORE_ASK = (
+    "\u267b\ufe0f <b>Bazani tiklash</b>\n\n"
+    "Zaxira faylini shu yerga <b>yuboring</b> \u2014 <code>.db.gz</code> yoki "
+    "<code>.db</code>.\n\n"
+    "Zaxira kanalidan faylni topib, <b>«Переслать / Yuborish»</b> qiling "
+    "yoki yuklab olib qayta yuboring.\n\n"
+    "<i>Bot faylni avval tekshiradi va ichida nima borligini ko\u2019rsatadi. "
+    "Tasdiqlamaguningizcha hozirgi bazaga tegilmaydi.</i>\n\n"
+    "Bekor qilish: /cancel"
+)
+
+
 @router.message(F.text == BTN_SETTINGS)
 @router.message(Command("sozlama"))
 async def settings_menu(message: Message, state: FSMContext, session: AsyncSession) -> None:
@@ -108,6 +136,16 @@ async def settings_action(
 
     if action == "journal":
         await show_journal(call.message, session, page=0)
+        await call.answer()
+        return
+
+    if action == "restore":
+        # Butun bazani almashtiradigan amal — faqat .env dagi EGASI.
+        if not is_owner(call.from_user.id):
+            await call.answer("Bu amal faqat bot egasiga.", show_alert=True)
+            return
+        await state.set_state(Setup.restore_file)
+        await call.message.answer(RESTORE_ASK)
         await call.answer()
         return
 
@@ -885,6 +923,156 @@ async def show_daily_report(message: Message, session: AsyncSession) -> None:
     since = (now - timedelta(days=1)).astimezone(timezone.utc)
     summary = await svc.daily_summary(session, since)
     await message.answer(texts.daily_report(summary, now.strftime("%d.%m.%Y")))
+
+
+
+
+@router.message(Command("tiklash"))
+async def restore_command(message: Message, state: FSMContext) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await state.set_state(Setup.restore_file)
+    await message.answer(RESTORE_ASK)
+
+
+@router.message(Setup.restore_file, F.document)
+async def restore_got_file(
+    message: Message, state: FSMContext, bot: Bot
+) -> None:
+    """Fayl keldi: yuklab olamiz, TEKSHIRAMIZ, tasdiq so'raymiz.
+
+    Bu bosqichda ishlab turgan bazaga umuman tegilmaydi.
+    """
+    if not is_owner(message.from_user.id):
+        await state.set_state(None)
+        return
+
+    doc = message.document
+    name = doc.file_name or "zaxira.db"
+    if not (name.endswith(".db") or name.endswith(".db.gz")):
+        await message.answer(
+            "\u2757\ufe0f Bu zaxira fayliga o\u2018xshamaydi.\n\n"
+            "Nomi <code>.db</code> yoki <code>.db.gz</code> bilan tugashi kerak."
+        )
+        return
+
+    # Telegram bot orqali yuklab olish chegarasi 20 MB.
+    if doc.file_size and doc.file_size > 20 * 1024 * 1024:
+        await message.answer(
+            "\u2757\ufe0f Fayl 20 MB dan katta \u2014 Telegram bot orqali yuklab "
+            "bo\u2018lmaydi.\n\nBu holda serverga to\u2018g\u2018ridan-to\u2018g\u2018ri "
+            "kirib tiklash kerak."
+        )
+        return
+
+    await message.answer("\u23f3 Fayl olinmoqda\u2026")
+    dbrestore.cleanup()
+    tmp = dbrestore.workdir() / name
+
+    try:
+        file = await bot.get_file(doc.file_id)
+        await bot.download_file(file.file_path, destination=tmp)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Zaxira fayli yuklanmadi: %s", e)
+        await message.answer(f"\u274c Faylni olib bo\u2018lmadi: {e}"[:300])
+        return
+
+    try:
+        preview = dbrestore.inspect(tmp)
+    except dbrestore.RestoreError as e:
+        await state.set_state(None)
+        await message.answer(
+            f"\u274c <b>Bu fayldan tiklab bo\u2018lmaydi</b>\n\n{e}\n\n"
+            "Boshqa (eskiroq) nusxani sinab ko\u2018ring."
+        )
+        dbrestore.cleanup()
+        return
+
+    await state.update_data(restore_path=str(preview.path))
+    await message.answer(
+        "\U0001f50e <b>Fayl tekshirildi \u2014 hammasi joyida</b>\n\n"
+        f"\U0001f464 Foydalanuvchi: <b>{preview.users}</b>\n"
+        f"\U0001f4e2 E\u2019lon: <b>{preview.jobs}</b>\n"
+        f"\U0001f4dd Ariza: <b>{preview.bookings}</b>\n"
+        f"\U0001f4be Hajmi: {preview.size_kb:.0f} KB"
+        + ("  (siqilgan fayldan ochildi)" if preview.was_gz else "")
+        + "\n\n\u26a0\ufe0f <b>Diqqat:</b> tasdiqlasangiz hozirgi baza shu nusxa "
+        "bilan ALMASHTIRILADI va bot qayta ishga tushadi.\n\n"
+        "Hozirgi baza o\u2018chirilmaydi \u2014 nomi o\u2018zgartirilib chetga "
+        "olinadi.",
+        reply_markup=restore_confirm_kb(),
+    )
+
+
+@router.message(Setup.restore_file, F.text, ~F.text.startswith("/"))
+async def restore_wrong_input(message: Message) -> None:
+    await message.answer(
+        "\u2757\ufe0f Matn emas, <b>faylni</b> yuboring "
+        "(<code>.db.gz</code> yoki <code>.db</code>).\n\n"
+        "Bekor qilish: /cancel"
+    )
+
+
+@router.callback_query(RestoreCB.filter())
+async def restore_confirm(
+    call: CallbackQuery, callback_data: RestoreCB, state: FSMContext,
+    session: AsyncSession
+) -> None:
+    if not is_owner(call.from_user.id):
+        await call.answer("Bu amal faqat bot egasiga.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    await state.set_state(None)
+
+    if callback_data.action == "no":
+        dbrestore.cleanup()
+        await tg.edit_text(call.message, "\U0001f6ab Tiklash bekor qilindi.")
+        await tg.answer_cb(call)
+        return
+
+    raw = data.get("restore_path")
+    if not raw:
+        await tg.answer_cb(call, "Fayl topilmadi \u2014 qaytadan yuboring.", alert=True)
+        return
+
+    # Jurnalga YOZAMIZ \u2014 bazani almashtirishdan oldin, chunki keyin bu
+    # yozuv yangi bazada bo\u2018lmaydi (u eski nusxadan keladi).
+    await audit.log_action(
+        session, call.from_user.id, "restore", pathlib.Path(raw).name
+    )
+
+    await tg.edit_markup(call.message, None)
+    await tg.answer_cb(call, "\u267b\ufe0f Tiklanyapti\u2026")
+
+    try:
+        preview = dbrestore.inspect(pathlib.Path(raw))
+        aside = await dbrestore.apply(preview)
+    except dbrestore.RestoreError as e:
+        await call.message.answer(f"\u274c Tiklab bo\u2018lmadi: {e}"[:400])
+        return
+    except Exception as e:  # noqa: BLE001
+        log.exception("Tiklashda kutilmagan xato")
+        await call.message.answer(f"\u274c Tiklashda xato: {e}"[:400])
+        return
+
+    await call.message.answer(
+        "\u2705 <b>Baza tiklandi.</b>\n\n"
+        f"\U0001f464 {preview.users} foydalanuvchi \u00b7 "
+        f"\U0001f4e2 {preview.jobs} e\u2019lon \u00b7 "
+        f"\U0001f4dd {preview.bookings} ariza\n\n"
+        f"Eski baza saqlab qo\u2018yildi: <code>{aside.name}</code>\n\n"
+        "\U0001f504 Bot hozir qayta ishga tushadi. Bir necha soniyadan keyin "
+        "<code>/start</code> bosing.\n\n"
+        "<i>Agar bot lokal kompyuterda ishlayotgan bo\u2018lsa \u2014 uni "
+        "qo\u2018lda qayta ishga tushiring.</i>"
+    )
+
+    dbrestore.cleanup()
+    if runtime.stop_bot is not None:
+        runtime.stop_bot()
+    else:
+        log.warning("stop_bot o\u2018rnatilmagan \u2014 botni qo\u2018lda qayta ishga tushiring.")
 
 
 # ================================================================ oddiy maydonlar

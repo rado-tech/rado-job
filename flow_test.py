@@ -33,6 +33,7 @@ from aiogram.types import (  # noqa: E402
     CallbackQuery,
     Chat,
     Contact,
+    Document,
     Message,
     Update,
     User as TgUser,
@@ -142,6 +143,18 @@ def say(text, uid, chat_id=None):  # noqa: ANN001
             from_user=TgUser(id=uid, is_bot=False, first_name="U"),
         ),
     )
+
+
+def send_file(name, uid, size=2048):  # noqa: ANN001
+    global UID
+    UID += 1
+    return Update(update_id=UID, message=Message(
+        message_id=UID, date=datetime.now(),
+        chat=Chat(id=uid, type="private"),
+        from_user=TgUser(id=uid, is_bot=False, first_name="U"),
+        document=Document(file_id="F" + str(UID), file_unique_id="U" + str(UID),
+                          file_name=name, file_size=size),
+    ))
 
 
 async def feed(update):  # noqa: ANN001
@@ -316,6 +329,31 @@ async def main():  # noqa: C901
     out = await feed(press("p:cat:__done__", 90))
     check("ro'yxat yakunida TABRIK chiqadi",
           any("Tayyor" in t for t in out), str(out)[:80])
+
+
+    print("")
+    print("== 10. Bazani tiklash (yangi)")
+    out = await feed(press("s:restore", 5))
+    check("tiklash so'ralди", any("tiklash" in t.lower() for t in out), str(out)[:70])
+    out = await feed(send_file("hujjat.pdf", 5))
+    check("noto'g'ri fayl rad etildi",
+          any("o‘xshamaydi" in t or "xshamaydi" in t for t in out), str(out)[:70])
+    out = await feed(send_file("katta.db.gz", 5, size=30 * 1024 * 1024))
+    check("20 MB dan katta fayl rad etildi",
+          any("20 MB" in t for t in out), str(out)[:70])
+    out = await feed(say("matn yubordim", 5))
+    check("matn emas, fayl so'raldi", any("faylni" in t.lower() for t in out), str(out)[:70])
+    out = await feed(say("/cancel", 5))
+    check("bekor qilindi", bool(out) and no_error(out), str(out)[:70])
+
+    print("")
+    print("== 11. Tiklash faqat EGASIGA")
+    out = await feed(press("s:restore", 2))
+    check("oddiy ishchi tiklay olmaydi",
+          not any("tiklash" in t.lower() for t in out), str(out)[:70])
+    out = await feed(press("rs:yes", 2))
+    check("tasdiq tugmasi ham ishlamaydi",
+          not any("tiklandi" in t.lower() for t in out), str(out)[:70])
 
     await engine.dispose()
     DB.unlink(missing_ok=True)

@@ -366,7 +366,23 @@ ichida ishlaydi va **doim butun** nusxa beradi, botni to'xtatmasdan.
 
 ### 4. Tiklash
 
-Botni to'xtating (`Ctrl+C`), keyin:
+**Bulutda (Railway) — botning o'zidan.** Volume ichiga tashqaridan fayl
+qo'yish yo'li yo'q, shuning uchun tiklash botga o'rnatilgan:
+
+`⚙️ Sozlamalar` -> `♻️ Bazani tiklash` (yoki `/tiklash`) -> zaxira
+faylini botga yuborasiz -> bot uni tekshirib, nechta foydalanuvchi va
+e'lon borligini ko'rsatadi -> tasdiqlaysiz -> baza almashadi va bot
+qayta ishga tushadi.
+
+Faqat `.env` dagi **egasi** qila oladi. Hozirgi baza o'chirilmaydi —
+`rado_job.before-restore-...db` deb chetga olinadi. Fayl yaroqsiz
+bo'lsa (buzilgan, boshqa bazadan, umuman SQLite emas) tiklash
+boshlanmaydi ham.
+
+> Telegram bot orqali yuklab olish chegarasi 20 MB. Siqilgan zaxira
+> uzoq vaqt shundan kichik bo'lib qoladi.
+
+**Lokal kompyuterda** botni to'xtating (`Ctrl+C`), keyin:
 
 ```bash
 .venv\Scripts\python.exe restore.py

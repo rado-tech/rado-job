@@ -178,6 +178,13 @@ class ChanListCB(CallbackData, prefix="chl"):
     page: int = 0
 
 
+class RestoreCB(CallbackData, prefix="rs"):
+    """Bazani tiklash tasdig'i. Qaytarib bo'lmaydigan amal — shuning
+    uchun alohida, tasodifan bosilmaydigan tugma."""
+
+    action: str  # yes | no
+
+
 class ProfCB(CallbackData, prefix="pr"):
     """Profil sozlamalari tugmalari.
 

@@ -31,6 +31,7 @@ from bot.callbacks import (
     NavCB,
     PickCB,
     ProfCB,
+    RestoreCB,
     PubCB,
     RateCB,
     RejCB,
@@ -710,7 +711,8 @@ def settings_kb(free_mode: bool = False) -> InlineKeyboardMarkup:
     kb.button(text="🩺 Bot holati", callback_data=SetCB(action="health").pack())
     kb.button(text="📈 Kunlik hisobot", callback_data=SetCB(action="report").pack())
     kb.button(text="💾 Zaxira nusxa olish", callback_data=SetCB(action="backup").pack())
-    kb.adjust(1, 2, 2, 2, 2, 2, 2, 1)
+    kb.button(text="♻️ Bazani tiklash", callback_data=SetCB(action="restore").pack())
+    kb.adjust(1, 2, 2, 2, 2, 2, 2, 2)
     return kb.as_markup()
 
 
@@ -824,6 +826,20 @@ def publish_pick_kb(
             callback_data=PubCB(action="done", job_id=job_id).pack(),
         )
     )
+    return kb.as_markup()
+
+
+def restore_confirm_kb() -> InlineKeyboardMarkup:
+    """Tiklash tasdig'i.
+
+    «Ha» tugmasi ataylab uzun va aniq yozilgan: bu amal qaytarilmaydi va
+    tasodifan bosilmasligi kerak.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Ha, bazani ALMASHTIRISH",
+              callback_data=RestoreCB(action="yes").pack())
+    kb.button(text="🚫 Bekor qilish", callback_data=RestoreCB(action="no").pack())
+    kb.adjust(1)
     return kb.as_markup()
 
 
