@@ -41,6 +41,7 @@ from bot.permissions import IsAdmin, is_owner
 from bot.services import audit, backup, channels as ch, health, jobs as svc, publisher
 from bot.services import settings_store as store
 from bot.states import Setup
+from bot import tg
 from bot.utils import parse_int
 
 log = logging.getLogger(__name__)
@@ -108,6 +109,16 @@ async def settings_action(
     if action == "journal":
         await show_journal(call.message, session, page=0)
         await call.answer()
+        return
+
+    if action == "health":
+        await call.answer()
+        await show_health(call.message, session)
+        return
+
+    if action == "report":
+        await call.answer()
+        await show_daily_report(call.message, session)
         return
 
     # --- bitta chat: moderatsiya guruhi va zaxira kanali
@@ -192,11 +203,10 @@ async def show_channels(
     text = texts.channels_view(len(items), active)
     kb = channels_kb(items, page=page)
     if edit:
-        try:
-            await message.edit_text(text, reply_markup=kb)
-            return
-        except Exception:
-            pass
+        # Tahrirlab bo'lmasa (xabar eski yoki o'chirilgan) yangisini
+        # yuboramiz — tugma "o'lik" bo'lib qolmasin.
+        await tg.edit_or_send(message, text, reply_markup=kb)
+        return
     await message.answer(text, reply_markup=kb)
 
 
@@ -320,24 +330,34 @@ async def channel_filter_pick(
 
     if callback_data.value == "__done__":
         await state.set_state(None)
-        await call.message.edit_reply_markup(reply_markup=None)
-        await call.answer("✅ Saqlandi")
+        await tg.edit_markup(call.message, None)
+        await tg.answer_cb(call, "✅ Saqlandi")
         await show_channel(call.message, session, channel.id)
         return
 
     if callback_data.value == "__all__":
+        # Allaqachon bo'sh bo'lsa ham foydalanuvchiga TASDIQ ko'rsatamiz:
+        # tugma bosildi, holat «barchasi» — bu to'g'ri natija.
+        was_empty = not current
         current = []
-    elif callback_data.value in current:
-        current.remove(callback_data.value)
     else:
-        current.append(callback_data.value)
+        was_empty = False
+        if callback_data.value in current:
+            current.remove(callback_data.value)
+        else:
+            current.append(callback_data.value)
 
     await ch.set_filter(session, channel.id, field, current)
     options = region_options() if is_region else category_options()
-    await call.message.edit_reply_markup(
-        reply_markup=multi_pick_kb(callback_data.field, options, current)
+    # Klaviatura o'zgarmagan bo'lishi mumkin (masalan «Barchasi» ikki marta
+    # bosilganda) — bu xato emas, shuning uchun tg.edit_markup jimgina
+    # o'tkazib yuboradi.
+    await tg.edit_markup(
+        call.message, multi_pick_kb(callback_data.field, options, current)
     )
-    await call.answer()
+    await tg.answer_cb(
+        call, "🌐 Filtr olib tashlandi — barchasi" if (was_empty or not current) else ""
+    )
 
 
 # ================================================================ chat ulash
@@ -762,11 +782,8 @@ async def show_journal(
         kb = journal_kb(page, total, JOURNAL_PER_PAGE)
 
     if edit:
-        try:
-            await message.edit_text(text[:4000], reply_markup=kb)
-            return
-        except Exception:
-            pass
+        await tg.edit_or_send(message, text[:4000], reply_markup=kb)
+        return
     await message.answer(text[:4000], reply_markup=kb)
 
 
@@ -833,8 +850,7 @@ async def backup_command(message: Message, session: AsyncSession) -> None:
     await do_backup(message, session, staff_id=message.from_user.id)
 
 
-@router.message(Command("health"))
-async def health_command(message: Message, session: AsyncSession) -> None:
+async def show_health(message: Message, session: AsyncSession) -> None:
     """Bot va bazaning ahvoli — bir qarashda."""
     age = backup.age_hours()
     backup_line = (
@@ -854,6 +870,21 @@ async def health_command(message: Message, session: AsyncSession) -> None:
         f"📢 Ochiq e'lon: {stats['open_jobs']}\n"
         f"🔎 Tekshiruvda: {stats['waiting']}"
     )
+
+
+@router.message(Command("health"))
+async def health_command(message: Message, session: AsyncSession) -> None:
+    await show_health(message, session)
+
+
+async def show_daily_report(message: Message, session: AsyncSession) -> None:
+    """Kunlik hisobotni kutmasdan ko'rish (admin.py dagi /hisobot bilan bir xil)."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(TZ)
+    since = (now - timedelta(days=1)).astimezone(timezone.utc)
+    summary = await svc.daily_summary(session, since)
+    await message.answer(texts.daily_report(summary, now.strftime("%d.%m.%Y")))
 
 
 # ================================================================ oddiy maydonlar

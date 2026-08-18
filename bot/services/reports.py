@@ -60,13 +60,3 @@ async def close(session: AsyncSession, report: Report, staff_id: int) -> None:
     report.handled_by = staff_id
     report.handled_at = utcnow()
     await session.commit()
-
-
-async def recent_by_user(session: AsyncSession, user_id: int, limit: int = 5) -> list[Report]:
-    stmt = (
-        select(Report)
-        .where(Report.user_id == user_id)
-        .order_by(Report.created_at.desc())
-        .limit(limit)
-    )
-    return list((await session.scalars(stmt)).all())

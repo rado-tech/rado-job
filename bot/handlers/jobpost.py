@@ -49,6 +49,7 @@ from bot.services import jobs as svc
 from bot.services import publisher
 from bot.services import settings_store as store
 from bot.states import NewJob
+from bot import tg
 from bot.utils import clean, local_today, parse_date, parse_int, parse_time
 
 log = logging.getLogger(__name__)
@@ -501,8 +502,8 @@ async def confirm(
     session.add(job)
     await session.commit()
 
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer()
+    await tg.edit_markup(call.message, None)
+    await tg.answer_cb(call)
 
     if staff:
         # Kanal ulanmagan bo'lsa tanlov o'rniga darhol e'lon qilamiz —

@@ -32,6 +32,7 @@ from bot.keyboards import BTN_ADS, ad_channels_kb, admin_menu, categories_kb, re
 from bot.permissions import IsAdmin
 from bot.services import audit, broadcast, channels as ch, jobs as svc
 from bot.states import Ad
+from bot import tg
 
 log = logging.getLogger(__name__)
 router = Router(name="ads")
@@ -109,8 +110,8 @@ async def ad_audience(
 ) -> None:
     choice = callback_data.value
     await state.update_data(mode=choice)
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer()
+    await tg.edit_markup(call.message, None)
+    await tg.answer_cb(call)
 
     if choice == "region":
         await state.set_state(Ad.pick)
@@ -150,8 +151,8 @@ async def ad_pick_channels(
         if not picked:
             await call.answer("Kamida bittasini tanlang.", show_alert=True)
             return
-        await call.message.edit_reply_markup(reply_markup=None)
-        await call.answer()
+        await tg.edit_markup(call.message, None)
+        await tg.answer_cb(call)
         await _preview(call.message, state, session)
         return
 
@@ -168,8 +169,8 @@ async def ad_pick_channels(
         await state.update_data(picked=picked)
 
     items = await ch.all_channels(session, only_active=True)
-    await call.message.edit_reply_markup(reply_markup=ad_channels_kb(items, picked, page))
-    await call.answer()
+    await tg.edit_markup(call.message, ad_channels_kb(items, picked, page))
+    await tg.answer_cb(call)
 
 
 @router.callback_query(Ad.pick, PickCB.filter(F.field.in_({"adreg", "adcat"})))
@@ -178,8 +179,8 @@ async def ad_pick(
 ) -> None:
     key = "region" if callback_data.field == "adreg" else "category"
     await state.update_data(**{key: callback_data.value})
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer()
+    await tg.edit_markup(call.message, None)
+    await tg.answer_cb(call)
     await _preview(call.message, state, session)
 
 
@@ -255,14 +256,14 @@ async def ad_confirm(
 ) -> None:
     if callback_data.value == "no":
         await state.clear()
-        await call.message.edit_text("🚫 Reklama bekor qilindi.")
-        await call.answer()
+        await tg.edit_text(call.message, "🚫 Reklama bekor qilindi.")
+        await tg.answer_cb(call)
         return
 
     data = await state.get_data()
     await state.clear()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer("🚀 Boshlandi")
+    await tg.edit_markup(call.message, None)
+    await tg.answer_cb(call, "🚀 Boshlandi")
 
     if data["mode"] in ("channels", "pickch"):
         await audit.log_action(

@@ -37,6 +37,7 @@ from bot.services import audit, channels, jobs as svc
 from bot.services import publisher, ratings, reports
 from bot.services import settings_store as store
 from bot.states import ReportFlow, Search
+from bot import tg
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -395,11 +396,8 @@ async def show_users(
         users, page=page, total=total, per_page=USERS_PER_PAGE, only_blocked=only_blocked
     )
     if edit:
-        try:
-            await message.edit_text(text, reply_markup=kb)
-            return
-        except Exception:
-            pass
+        await tg.edit_or_send(message, text, reply_markup=kb)
+        return
     await message.answer(text, reply_markup=kb)
 
 
